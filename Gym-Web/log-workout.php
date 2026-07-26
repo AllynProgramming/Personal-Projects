@@ -24,6 +24,9 @@ $commonSplits = ['Upper Day', 'Lower Day', 'Push Day', 'Pull Day', 'Leg Day', 'F
 $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
     return !in_array($p['plan_name'], $commonSplits, true);
 });
+
+// Default to today's date, but allow the page to use a user-selected date when present
+$selectedSessionDate = $_GET['session_date'] ?? date('Y-m-d');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -79,6 +82,55 @@ $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
         }
 
         .navbar h1 { font-size: 1.9rem; letter-spacing: 0.03em; }
+
+        .nav-toggle {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 46px;
+            height: 46px;
+            border: 1px solid rgba(151, 109, 222, 0.3);
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .nav-toggle:hover,
+        .nav-toggle:focus-visible {
+            background: rgba(120, 81, 169, 0.2);
+            border-color: rgba(155, 106, 240, 0.6);
+            transform: translateY(-1px);
+        }
+
+        .nav-toggle.is-active {
+            background: rgba(120, 81, 169, 0.24);
+            border-color: rgba(155, 106, 240, 0.7);
+        }
+
+        .barbell-icon {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .barbell-icon .bar {
+            width: 18px;
+            height: 4px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #fff, #c284ff);
+            box-shadow: 0 0 12px rgba(194, 132, 255, 0.3);
+        }
+
+        .barbell-icon .plate {
+            width: 8px;
+            height: 12px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #a755ff, #7a3ecf);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.2);
+        }
 
         .navbar-right {
             display: flex;
@@ -197,14 +249,12 @@ $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
 
         select option { background: #14092b; color: #fff; }
 
-        .date-display {
-            padding: 13px 15px;
-            border-radius: 12px;
-            border: 1px solid rgba(151, 109, 222, 0.14);
-            background: rgba(255, 255, 255, 0.02);
-            color: var(--text-muted);
-            font-size: 0.95rem;
+        /* Style date input calendar icon */
+        input[type="date"] {
+            color-scheme: dark;
         }
+
+        input[type="date"]::placeholder { color: #7e89ab; }
 
         .exercise-row {
             background: var(--panel-2);
@@ -328,6 +378,33 @@ $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
             .add-row-btn { padding: 12px 0; }
         }
 
+        @media (max-width: 860px) {
+            .nav-toggle { display: inline-flex; }
+
+            .navbar-right {
+                display: none;
+                position: absolute;
+                top: calc(100% + 10px);
+                right: 20px;
+                left: 20px;
+                flex-direction: column;
+                align-items: stretch;
+                padding: 14px;
+                background: rgba(5, 5, 15, 0.98);
+                border: 1px solid rgba(151, 109, 222, 0.24);
+                border-radius: 18px;
+                box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24);
+            }
+
+            .navbar-right.is-open { display: flex; }
+
+            .navbar-right a {
+                width: 100%;
+                text-align: center;
+                justify-content: center;
+            }
+        }
+
         @media (max-width: 420px) {
             .exercise-fields { grid-template-columns: 1fr; }
             .remove-row-btn { width: 32px; height: 32px; }
@@ -338,7 +415,14 @@ $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
 <body>
     <nav class="navbar">
         <h1>💪 GymTrack</h1>
-        <div class="navbar-right">
+        <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" type="button">
+            <span class="barbell-icon" aria-hidden="true">
+                <span class="plate"></span>
+                <span class="bar"></span>
+                <span class="plate"></span>
+            </span>
+        </button>
+        <div class="navbar-right" id="navMenu">
             <a href="dashboard.php">Dashboard</a>
             <a href="profile.php">Profile</a>
             <a href="friends.php">Friends</a>
@@ -379,8 +463,8 @@ $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
                         <input type="text" id="plan_name" name="plan_name" class="hidden" placeholder="e.g. Chest + Legs, Shoulders + Back" style="margin-top: 8px;">
                     </div>
                     <div class="form-group">
-                        <label>Date</label>
-                        <div class="date-display"><?php echo date('D, M j'); ?></div>
+                        <label for="session_date">Date</label>
+                        <input type="date" id="session_date" name="session_date" value="<?php echo htmlspecialchars($selectedSessionDate); ?>" required>
                     </div>
                     <div class="form-group">
                         <label for="duration_minutes">Duration (min)</label>
@@ -474,6 +558,23 @@ $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
         }
 
         document.getElementById('addRowBtn').addEventListener('click', addRow);
+
+        const navToggle = document.getElementById('navToggle');
+        const navMenu = document.getElementById('navMenu');
+
+        if (navToggle && navMenu) {
+            navToggle.addEventListener('click', function () {
+                navMenu.classList.toggle('is-open');
+                navToggle.classList.toggle('is-active');
+            });
+
+            document.addEventListener('click', function (event) {
+                if (!navToggle.contains(event.target) && !navMenu.contains(event.target)) {
+                    navMenu.classList.remove('is-open');
+                    navToggle.classList.remove('is-active');
+                }
+            });
+        }
 
         const navbar = document.querySelector('.navbar');
         let lastScrollY = window.scrollY;

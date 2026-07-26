@@ -36,7 +36,7 @@ $stmt = $conn->prepare("
         COUNT(e.id) as exercise_count,
         ws.duration_minutes
     FROM workout_sessions ws
-    LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id
+    LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id AND wp.user_id = ws.user_id
     LEFT JOIN exercises e ON ws.id = e.session_id
     WHERE ws.user_id = ?
     GROUP BY ws.id
@@ -47,6 +47,71 @@ $stmt->bind_param("i", $userId);
 $stmt->execute();
 $recentWorkouts = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
+
+// Get all workouts grouped by week
+$stmt = $conn->prepare("
+    SELECT 
+        ws.id,
+        ws.session_date,
+        wp.plan_name,
+        COUNT(e.id) as exercise_count,
+        ws.duration_minutes
+    FROM workout_sessions ws
+    LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id AND wp.user_id = ws.user_id
+    LEFT JOIN exercises e ON ws.id = e.session_id
+    WHERE ws.user_id = ?
+    GROUP BY ws.id
+    ORDER BY ws.session_date DESC
+    LIMIT 200
+");
+$stmt->bind_param("i", $userId);
+$stmt->execute();
+$allWorkouts = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+
+// Group workouts by week
+$workoutsByWeek = [];
+foreach ($allWorkouts as $workout) {
+    $date = new DateTime($workout['session_date']);
+    $week = $date->format('W');
+    $year = $date->format('Y');
+    $weekKey = $year . '-W' . $week;
+    
+    if (!isset($workoutsByWeek[$weekKey])) {
+        $startDate = new DateTime($workout['session_date']);
+        $startDate->modify('Monday this week');
+        $endDate = clone $startDate;
+        $endDate->modify('Sunday this week');
+        
+        $workoutsByWeek[$weekKey] = [
+            'week' => $week,
+            'year' => $year,
+            'startDate' => $startDate->format('Y-m-d'),
+            'endDate' => $endDate->format('Y-m-d'),
+            'workouts' => [],
+            'totalDuration' => 0,
+            'totalExercises' => 0,
+            'dayData' => [] // Store data per day for charts
+        ];
+    }
+    
+    $workoutsByWeek[$weekKey]['workouts'][] = $workout;
+    $workoutsByWeek[$weekKey]['totalDuration'] += $workout['duration_minutes'] ?? 0;
+    $workoutsByWeek[$weekKey]['totalExercises'] += $workout['exercise_count'];
+    
+    // Track data by day for charts
+    $dayOfWeek = $date->format('D');
+    if (!isset($workoutsByWeek[$weekKey]['dayData'][$dayOfWeek])) {
+        $workoutsByWeek[$weekKey]['dayData'][$dayOfWeek] = 0;
+    }
+    $workoutsByWeek[$weekKey]['dayData'][$dayOfWeek] += $workout['exercise_count'];
+}
+
+// Sort weeks in reverse order (newest first)
+krsort($workoutsByWeek);
+
+$latestWeekData = !empty($workoutsByWeek) ? reset($workoutsByWeek) : null;
+$weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -103,6 +168,56 @@ $stmt->close();
         .navbar h1 {
             font-size: 1.9rem;
             letter-spacing: 0.03em;
+        }
+
+        .nav-toggle {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 46px;
+            height: 46px;
+            border: 1px solid rgba(151, 109, 222, 0.3);
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .nav-toggle:hover,
+        .nav-toggle:focus-visible {
+            background: rgba(120, 81, 169, 0.2);
+            border-color: rgba(155, 106, 240, 0.6);
+            transform: translateY(-1px);
+        }
+
+        .nav-toggle.is-active {
+            background: rgba(120, 81, 169, 0.24);
+            border-color: rgba(155, 106, 240, 0.7);
+        }
+
+        .barbell-icon {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transform: rotate(0deg);
+        }
+
+        .barbell-icon .bar {
+            width: 18px;
+            height: 4px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #fff, #c284ff);
+            box-shadow: 0 0 12px rgba(194, 132, 255, 0.3);
+        }
+
+        .barbell-icon .plate {
+            width: 8px;
+            height: 12px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #a755ff, #7a3ecf);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.2);
         }
 
         .navbar-right {
@@ -212,8 +327,8 @@ $stmt->close();
 
         .chart-scale {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 14px;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 8px;
             align-items: end;
             min-height: 160px;
         }
@@ -239,8 +354,8 @@ $stmt->close();
 
         .chart-labels {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 14px;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 8px;
             margin-top: 12px;
             color: var(--text-muted);
             font-size: 0.85rem;
@@ -434,6 +549,148 @@ $stmt->close();
             font-weight: 700;
         }
 
+        .weekly-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 28px;
+        }
+
+        .weekly-card {
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 24px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            color: inherit;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .weekly-card:hover {
+            background: rgba(30, 15, 50, 0.9);
+            border-color: rgba(155, 106, 240, 0.4);
+            transform: translateY(-6px);
+            box-shadow: 0 12px 28px rgba(167, 85, 255, 0.2);
+        }
+
+        .weekly-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .weekly-card-title {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .weekly-card-title h3 {
+            color: #fff;
+            font-size: 1.25rem;
+            margin: 0;
+        }
+
+        .weekly-card-title p {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin: 0;
+        }
+
+        .weekly-card-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .weekly-stat {
+            background: rgba(120, 81, 169, 0.1);
+            border: 1px solid rgba(151, 109, 222, 0.2);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .weekly-stat-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .weekly-stat-value {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: var(--accent-strong);
+        }
+
+        .weekly-card-days {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .day-tag {
+            padding: 6px 10px;
+            background: rgba(151, 109, 222, 0.15);
+            border: 1px solid rgba(151, 109, 222, 0.3);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #d8b8ff;
+        }
+
+        .weekly-card-chart {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 6px;
+            align-items: flex-end;
+            height: 120px;
+        }
+
+        .chart-bar-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-end;
+            height: 100%;
+            gap: 4px;
+        }
+
+        .chart-bar-item {
+            width: 100%;
+            background: linear-gradient(180deg, rgba(167, 85, 255, 0.92), rgba(120, 81, 169, 0.95));
+            border-radius: 4px 4px 0 0;
+            min-height: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .chart-bar-item:hover {
+            background: linear-gradient(180deg, #c284ff 0%, #9b6af0 100%);
+            box-shadow: 0 0 12px rgba(194, 132, 255, 0.4);
+        }
+
+        .chart-bar-empty {
+            width: 100%;
+            background: rgba(151, 109, 222, 0.08);
+            border-radius: 4px;
+            height: 8px;
+        }
+
+        .chart-day-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-align: center;
+            margin-top: 4px;
+            font-weight: 600;
+        }
+
         @media (max-width: 768px) {
             .navbar {
                 flex-direction: column;
@@ -496,6 +753,15 @@ $stmt->close();
             .section-title {
                 font-size: 1.2rem;
             }
+
+            .weekly-cards-grid {
+                grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+                gap: 16px;
+            }
+
+            .weekly-card-chart {
+                height: 100px;
+            }
         }
 
         @media (max-width: 480px) {
@@ -509,9 +775,56 @@ $stmt->close();
             .welcome-copy h2 { font-size: 1.45rem; }
             .welcome-copy p { font-size: 0.95rem; }
 
-            .welcome-chart { padding: 12px; border-radius: 14px; }
-            .chart-scale { min-height: 90px; gap: 8px; }
-            .chart-bar { min-height: 56px; border-radius: 12px; }
+            .welcome-chart { 
+                padding: 14px; 
+                border-radius: 14px;
+                gap: 12px;
+                position: relative;
+            }
+            .chart-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .chart-header p { font-size: 0.75rem; }
+            .chart-header strong { font-size: 1rem; }
+            .chart-header span { font-size: 0.8rem; }
+            .chart-scale { 
+                display: flex;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                overflow-y: hidden;
+                scroll-snap-type: x proximity;
+                gap: 8px;
+                min-height: 140px;
+                padding-bottom: 8px;
+                -webkit-overflow-scrolling: touch;
+            }
+            .chart-bar { 
+                flex: 0 0 calc(50% - 4px);
+                min-height: 40px; 
+                border-radius: 10px;
+                scroll-snap-align: start;
+            }
+            .chart-bar::after {
+                font-size: 0.75rem;
+                top: -18px;
+            }
+            .chart-labels { 
+                display: flex;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                overflow-y: hidden;
+                gap: 8px; 
+                font-size: 0.75rem;
+                margin-top: 8px;
+                scroll-snap-type: x proximity;
+                -webkit-overflow-scrolling: touch;
+            }
+            .chart-labels span {
+                flex: 0 0 calc(50% - 4px);
+                scroll-snap-align: start;
+            }
 
             .overview-panel { padding: 18px; }
             .overview-actions a { font-size: 0.95rem; padding: 12px; }
@@ -521,14 +834,37 @@ $stmt->close();
             .workout-item p { font-size: 0.9rem; }
 
             .section-title { font-size: 1rem; }
-        }
+
+            .weekly-cards-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .weekly-card {
+                padding: 18px;
+            }
+
+            .weekly-card-title h3 {
+                font-size: 1.1rem;
+            }
+
+            .weekly-card-chart {
+                height: 80px;
+                gap: 4px;
+            }
         }
     </style>
 </head>
 <body>
     <nav class="navbar">
         <h1>💪 GymTrack</h1>
-        <div class="navbar-right">
+        <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" type="button">
+            <span class="barbell-icon" aria-hidden="true">
+                <span class="plate"></span>
+                <span class="bar"></span>
+                <span class="plate"></span>
+            </span>
+        </button>
+        <div class="navbar-right" id="navMenu">
             <span>Welcome, <?php echo htmlspecialchars($user['username']); ?>!</span>
             <a href="profile.php">Profile</a>
             <a href="friends.php">Friends</a>
@@ -543,29 +879,46 @@ $stmt->close();
                     <h2>Welcome back, <?php echo htmlspecialchars($user['first_name'] ?? $user['username']); ?>.</h2>
                     <p>GymTrack is your premium performance hub — review your progress, lock in consistency, and plan every workout with confidence.</p>
                     <div class="welcome-cta">
-                        <span style="color: var(--text-muted); font-size:0.95rem;">Last 4 workouts</span>
-                        <strong style="color:#fff; font-size:1.1rem;">Workout intensity trend</strong>
+                        <span style="color: var(--text-muted); font-size:0.95rem;">Latest week</span>
+                        <strong style="color:#fff; font-size:1.1rem;">Weekly exercise volume</strong>
                     </div>
                 </div>
                 <div class="welcome-chart">
                     <div class="chart-header">
                         <div>
                             <p>Volume trend</p>
-                            <strong style="color:#fff; font-size:1.1rem;">Stable progress</strong>
+                            <strong style="color:#fff; font-size:1.1rem;">
+                                <?php if ($latestWeekData): ?>
+                                    Week <?php echo htmlspecialchars($latestWeekData['week']); ?> · <?php echo htmlspecialchars(date('M j', strtotime($latestWeekData['startDate']))); ?>–<?php echo htmlspecialchars(date('M j', strtotime($latestWeekData['endDate']))); ?>
+                                <?php else: ?>
+                                    No workouts logged yet
+                                <?php endif; ?>
+                            </strong>
                         </div>
-                        <span style="color:#c284ff; font-size:0.95rem; font-weight:700;">⬆ 12% from last week</span>
+                        <?php if ($latestWeekData): ?>
+                            <span style="color:#c284ff; font-size:0.95rem; font-weight:700;"><?php echo $latestWeekData['totalExercises']; ?> exercises</span>
+                        <?php endif; ?>
                     </div>
                     <div class="chart-scale">
-                        <div class="chart-bar" data-value="62%" style="height: 62%;"></div>
-                        <div class="chart-bar" data-value="78%" style="height: 78%;"></div>
-                        <div class="chart-bar" data-value="68%" style="height: 68%;"></div>
-                        <div class="chart-bar" data-value="84%" style="height: 84%;"></div>
+                        <?php if ($latestWeekData): ?>
+                            <?php
+                                $maxLatestWeekValue = max(array_values($latestWeekData['dayData'])) ?: 1;
+                                foreach ($weekDays as $day):
+                                    $dayValue = $latestWeekData['dayData'][$day] ?? 0;
+                                    $barHeight = $dayValue > 0 ? max(18, min(100, round(($dayValue / $maxLatestWeekValue) * 100))) : 0;
+                            ?>
+                                <div class="chart-bar" data-value="<?php echo $dayValue; ?>" style="height: <?php echo $barHeight; ?>%;"></div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <?php for ($i = 0; $i < 7; $i++): ?>
+                                <div class="chart-bar" data-value="0" style="height: 0%;"></div>
+                            <?php endfor; ?>
+                        <?php endif; ?>
                     </div>
                     <div class="chart-labels">
-                        <span>Mon</span>
-                        <span>Wed</span>
-                        <span>Fri</span>
-                        <span>Sun</span>
+                        <?php foreach ($weekDays as $day): ?>
+                            <span><?php echo htmlspecialchars($day); ?></span>
+                        <?php endforeach; ?>
                     </div>
                 </div>
             </section>
@@ -614,22 +967,64 @@ $stmt->close();
             </div>
         </div>
 
-        <h2 class="section-title">Recent Workouts</h2>
+        <h2 class="section-title">Weekly Breakdown</h2>
 
-        <?php if (!empty($recentWorkouts)): ?>
-            <?php foreach ($recentWorkouts as $workout): ?>
-                <div class="workout-item">
-                    <div>
-                        <h4><?php echo htmlspecialchars($workout['plan_name'] ?? 'Workout'); ?></h4>
-                        <p>
-                            <?php echo date('M d, Y', strtotime($workout['session_date'])); ?> • 
-                            <?php echo $workout['exercise_count']; ?> exercises • 
-                            <?php echo $workout['duration_minutes'] ? $workout['duration_minutes'] . ' min' : 'Time not recorded'; ?>
-                        </p>
-                    </div>
-                    <a href="under-development.php">View</a> 
-                </div>
-            <?php endforeach; ?>
+        <?php if (!empty($workoutsByWeek)): ?>
+            <div class="weekly-cards-grid">
+                <?php foreach ($workoutsByWeek as $weekKey => $weekData): ?>
+                    <?php
+                        // Calculate max value for chart scaling
+                        $maxExercises = max(array_values($weekData['dayData'])) ?: 1;
+                        // Days of week in order
+                        $daysOrder = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+                    ?>
+                    <a href="workouts.php#week-<?php echo htmlspecialchars($weekKey); ?>" class="weekly-card">
+                        <div class="weekly-card-header">
+                            <div class="weekly-card-title">
+                                <h3>Week <?php echo htmlspecialchars($weekData['week']); ?></h3>
+                                <p><?php 
+                                    $startDate = new DateTime($weekData['startDate']);
+                                    $endDate = new DateTime($weekData['endDate']);
+                                    echo $startDate->format('M j') . ' - ' . $endDate->format('M j');
+                                ?></p>
+                            </div>
+                        </div>
+
+                        <div class="weekly-card-chart">
+                            <?php foreach ($daysOrder as $day): ?>
+                                <div class="chart-bar-wrapper">
+                                    <?php if (isset($weekData['dayData'][$day]) && $weekData['dayData'][$day] > 0): ?>
+                                        <?php $percentage = ($weekData['dayData'][$day] / $maxExercises) * 100; ?>
+                                        <div class="chart-bar-item" style="height: <?php echo max(20, $percentage); ?>%;" title="<?php echo $weekData['dayData'][$day]; ?> exercises"></div>
+                                    <?php else: ?>
+                                        <div class="chart-bar-empty"></div>
+                                    <?php endif; ?>
+                                    <span class="chart-day-label"><?php echo htmlspecialchars($day); ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+
+                        <div class="weekly-card-stats">
+                            <div class="weekly-stat">
+                                <div class="weekly-stat-label">Sessions</div>
+                                <div class="weekly-stat-value"><?php echo count($weekData['workouts']); ?></div>
+                            </div>
+                            <div class="weekly-stat">
+                                <div class="weekly-stat-label">Exercises</div>
+                                <div class="weekly-stat-value"><?php echo $weekData['totalExercises']; ?></div>
+                            </div>
+                            <div class="weekly-stat">
+                                <div class="weekly-stat-label">Duration</div>
+                                <div class="weekly-stat-value"><?php echo $weekData['totalDuration']; ?> min</div>
+                            </div>
+                            <div class="weekly-stat">
+                                <div class="weekly-stat-label">Avg/Day</div>
+                                <div class="weekly-stat-value"><?php echo ceil($weekData['totalDuration'] / count($weekData['workouts'])); ?> min</div>
+                            </div>
+                        </div>
+                    </a>
+                <?php endforeach; ?>
+            </div>
         <?php else: ?>
             <div class="empty-state">
                 <h3>No workouts yet</h3>
@@ -638,5 +1033,21 @@ $stmt->close();
             </div>
         <?php endif; ?>
     </div>
+
+    <script>
+        // Sync chart scale and labels scrolling on mobile
+        const chartScale = document.querySelector('.welcome-chart .chart-scale');
+        const chartLabels = document.querySelector('.welcome-chart .chart-labels');
+
+        if (chartScale && chartLabels) {
+            chartScale.addEventListener('scroll', () => {
+                chartLabels.scrollLeft = chartScale.scrollLeft;
+            });
+
+            chartLabels.addEventListener('scroll', () => {
+                chartScale.scrollLeft = chartLabels.scrollLeft;
+            });
+        }
+    </script>
 </body>
 </html>

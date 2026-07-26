@@ -27,7 +27,7 @@ $stmt = $conn->prepare("
     SELECT ws.session_date AS date, wp.plan_name AS plan_name, e.weight, e.reps, e.sets, e.notes
     FROM exercises e
     JOIN workout_sessions ws ON e.session_id = ws.id
-    LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id
+    LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id AND wp.user_id = ws.user_id
     WHERE ws.user_id = ? AND e.exercise_name = ?
     ORDER BY ws.session_date DESC, e.id DESC
 ");

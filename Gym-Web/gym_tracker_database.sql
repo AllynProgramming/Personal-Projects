@@ -16,10 +16,14 @@ CREATE TABLE users (
     profile_picture VARCHAR(255),
     bio TEXT,
     is_profile_public BOOLEAN DEFAULT FALSE,
+    google_id VARCHAR(255) UNIQUE,
+    auth_provider VARCHAR(50) DEFAULT 'local',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_username (username),
-    INDEX idx_email (email)
+    INDEX idx_email (email),
+    INDEX idx_google_id (google_id),
+    INDEX idx_auth_provider (auth_provider)
 ) ENGINE=InnoDB;
 
 -- ============================================

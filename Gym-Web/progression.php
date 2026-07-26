@@ -76,6 +76,55 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
 
         .navbar h1 { font-size: 1.9rem; letter-spacing: 0.03em; }
 
+        .nav-toggle {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 46px;
+            height: 46px;
+            border: 1px solid rgba(151, 109, 222, 0.3);
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .nav-toggle:hover,
+        .nav-toggle:focus-visible {
+            background: rgba(120, 81, 169, 0.2);
+            border-color: rgba(155, 106, 240, 0.6);
+            transform: translateY(-1px);
+        }
+
+        .nav-toggle.is-active {
+            background: rgba(120, 81, 169, 0.24);
+            border-color: rgba(155, 106, 240, 0.7);
+        }
+
+        .barbell-icon {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .barbell-icon .bar {
+            width: 18px;
+            height: 4px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #fff, #c284ff);
+            box-shadow: 0 0 12px rgba(194, 132, 255, 0.3);
+        }
+
+        .barbell-icon .plate {
+            width: 8px;
+            height: 12px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #a755ff, #7a3ecf);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.2);
+        }
+
         .navbar-right { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 
         .navbar-right a {
@@ -206,6 +255,33 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
             .summary-card { padding: 14px; }
         }
 
+        @media (max-width: 860px) {
+            .nav-toggle { display: inline-flex; }
+
+            .navbar-right {
+                display: none;
+                position: absolute;
+                top: calc(100% + 10px);
+                right: 20px;
+                left: 20px;
+                flex-direction: column;
+                align-items: stretch;
+                padding: 14px;
+                background: rgba(5, 5, 15, 0.98);
+                border: 1px solid rgba(151, 109, 222, 0.24);
+                border-radius: 18px;
+                box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24);
+            }
+
+            .navbar-right.is-open { display: flex; }
+
+            .navbar-right a {
+                width: 100%;
+                text-align: center;
+                justify-content: center;
+            }
+        }
+
         @media (max-width: 420px) {
             .summary-grid { grid-template-columns: 1fr; }
             .chart-wrap { height: 180px; }
@@ -216,7 +292,14 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
 <body>
     <nav class="navbar">
         <h1>💪 GymTrack</h1>
-        <div class="navbar-right">
+        <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" type="button">
+            <span class="barbell-icon" aria-hidden="true">
+                <span class="plate"></span>
+                <span class="bar"></span>
+                <span class="plate"></span>
+            </span>
+        </button>
+        <div class="navbar-right" id="navMenu">
             <a href="dashboard.php">Dashboard</a>
             <a href="log-workout.php">Log Workout</a>
             <a href="profile.php">Profile</a>
