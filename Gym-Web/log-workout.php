@@ -1,0 +1,532 @@
+<?php
+// log-workout.php
+// Form to log a new workout session (session details + one or more exercises)
+
+require_once __DIR__ . '/api/includes/db.php';
+require_once __DIR__ . '/api/includes/auth.php';
+
+requireLogin();
+
+$userId = getUserId();
+$user = getUserInfo($conn, $userId);
+
+// Pull distinct plan names this user has used before, so they can quickly reuse a custom split
+$stmt = $conn->prepare("SELECT DISTINCT plan_name FROM workout_plans WHERE user_id = ? ORDER BY plan_name");
+$stmt->bind_param("i", $userId);
+$stmt->execute();
+$planNames = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+
+// Common preset splits shown in the dropdown by default
+$commonSplits = ['Upper Day', 'Lower Day', 'Push Day', 'Pull Day', 'Leg Day', 'Full Body', 'Rest / Recovery'];
+
+// Only show past custom plans that aren't already covered by the common presets above
+$customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
+    return !in_array($p['plan_name'], $commonSplits, true);
+});
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log Workout - GymTrack</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg-dark: #05030a;
+            --panel: rgba(15, 8, 28, 0.95);
+            --panel-2: rgba(20, 12, 40, 0.98);
+            --text-main: #f6f7ff;
+            --text-muted: #adb2d4;
+            --accent: #7851A9;
+            --accent-strong: #9b6af0;
+            --border: rgba(151, 109, 222, 0.22);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            background:
+                radial-gradient(circle at top left, rgba(120, 81, 169, 0.18), transparent 20%),
+                radial-gradient(circle at bottom right, rgba(120, 81, 169, 0.12), transparent 18%),
+                var(--bg-dark);
+            color: var(--text-main);
+        }
+
+        .navbar {
+            background: rgba(5, 5, 15, 0.96);
+            border-bottom: 1px solid rgba(151, 109, 222, 0.2);
+            padding: 22px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            backdrop-filter: blur(16px);
+            transition: transform 0.25s ease, opacity 0.25s ease;
+            will-change: transform, opacity;
+        }
+
+        .navbar.navbar-hidden {
+            transform: translateY(-100%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .navbar h1 { font-size: 1.9rem; letter-spacing: 0.03em; }
+
+        .navbar-right {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .navbar-right a {
+            color: var(--text-main);
+            text-decoration: none;
+            padding: 10px 16px;
+            border-radius: 999px;
+            transition: background 0.3s ease, transform 0.2s ease;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            font-weight: 600;
+            font-size: 0.92rem;
+        }
+
+        .navbar-right a:hover {
+            background: rgba(120, 81, 169, 0.18);
+            transform: translateY(-1px);
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 32px 24px 60px;
+        }
+
+        .page-head { margin-bottom: 24px; }
+
+        .page-head h2 {
+            font-size: clamp(1.7rem, 2.4vw, 2.2rem);
+            margin-bottom: 6px;
+        }
+
+        .page-head p { color: var(--text-muted); font-size: 1rem; }
+
+        .message {
+            padding: 12px 14px;
+            border-radius: 12px;
+            font-weight: 600;
+            border: 1px solid transparent;
+            font-size: 0.95rem;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .message.show { display: block; }
+
+        .message.success {
+            background: rgba(151, 109, 222, 0.14);
+            border-color: rgba(151, 109, 222, 0.3);
+            color: #e7d6ff;
+        }
+
+        .message.error {
+            background: rgba(255, 94, 94, 0.16);
+            border-color: rgba(255, 94, 94, 0.24);
+            color: #ffd7d7;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 28px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22);
+            margin-bottom: 22px;
+        }
+
+        .panel-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 18px;
+            color: #fff;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: minmax(220px, 1.6fr) minmax(140px, 0.85fr) minmax(140px, 0.7fr);
+            gap: 14px;
+            align-items: end;
+        }
+
+        .form-group { display: grid; gap: 8px; }
+
+        label {
+            color: #d7dcf5;
+            font-size: 0.88rem;
+            font-weight: 600;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 13px 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(151, 109, 222, 0.22);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            font-size: 0.95rem;
+            font-family: inherit;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        input::placeholder { color: #7e89ab; }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: rgba(155, 106, 240, 0.8);
+            box-shadow: 0 0 0 3px rgba(155, 106, 240, 0.16);
+        }
+
+        select option { background: #14092b; color: #fff; }
+
+        .date-display {
+            padding: 13px 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(151, 109, 222, 0.14);
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .exercise-row {
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 18px;
+            margin-bottom: 14px;
+            position: relative;
+        }
+
+        .exercise-row-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .exercise-row-head span {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 700;
+        }
+
+        .remove-row-btn {
+            background: rgba(255, 94, 94, 0.12);
+            border: 1px solid rgba(255, 94, 94, 0.28);
+            color: #ffb3b3;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+            transition: background 0.2s ease;
+        }
+
+        .remove-row-btn:hover { background: rgba(255, 94, 94, 0.22); }
+
+        .remove-row-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .exercise-fields {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .exercise-fields-notes { display: grid; gap: 8px; }
+
+        .add-row-btn {
+            width: 100%;
+            padding: 13px 0;
+            background: rgba(151, 109, 222, 0.12);
+            border: 1px dashed rgba(155, 106, 240, 0.5);
+            color: #d8b8ff;
+            border-radius: 14px;
+            font-weight: 700;
+            font-size: 0.92rem;
+            cursor: pointer;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .add-row-btn:hover {
+            background: rgba(151, 109, 222, 0.2);
+            border-color: rgba(155, 106, 240, 0.8);
+        }
+
+        .save-bar {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+
+        button.btn-primary, button.btn-ghost {
+            border: none;
+            cursor: pointer;
+            font-weight: 700;
+            border-radius: 999px;
+            padding: 14px 28px;
+            font-size: 0.95rem;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #a755ff 0%, #7d3fd0 55%, #632a9f 100%);
+            color: #f8f9ff;
+            box-shadow: 0 16px 30px rgba(167, 85, 255, 0.32);
+            border: 1px solid rgba(177, 109, 255, 0.35);
+        }
+
+        .btn-primary:hover { transform: translateY(-2px); }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-ghost {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-ghost:hover { background: rgba(255, 255, 255, 0.1); }
+
+        @media (max-width: 720px) {
+            .field-grid { grid-template-columns: 1fr; gap: 12px; align-items: start; }
+            .exercise-fields { grid-template-columns: 1fr 1fr; }
+            .exercise-fields-notes { grid-column: 1 / -1; }
+            .panel { padding: 18px; }
+            .save-bar { flex-direction: column-reverse; gap: 10px; }
+            button.btn-primary, button.btn-ghost { width: 100%; }
+            .add-row-btn { padding: 12px 0; }
+        }
+
+        @media (max-width: 420px) {
+            .exercise-fields { grid-template-columns: 1fr; }
+            .remove-row-btn { width: 32px; height: 32px; }
+            .field-grid { gap: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1>💪 GymTrack</h1>
+        <div class="navbar-right">
+            <a href="dashboard.php">Dashboard</a>
+            <a href="profile.php">Profile</a>
+            <a href="friends.php">Friends</a>
+            <a href="api/logout.php">Logout</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="page-head">
+            <h2>Log a workout</h2>
+            <p>Add today's session — plan, exercises, and the numbers that matter.</p>
+        </div>
+
+        <div class="message" id="formMessage"></div>
+
+        <form id="workoutForm">
+            <div class="panel">
+                <p class="panel-title">Session details</p>
+                <div class="field-grid">
+                    <div class="form-group">
+                        <label for="plan_select">Workout plan</label>
+                        <select id="plan_select">
+                            <option value="">No plan / not sure yet</option>
+                            <optgroup label="Common splits">
+                                <?php foreach ($commonSplits as $split): ?>
+                                    <option value="<?php echo htmlspecialchars($split); ?>"><?php echo htmlspecialchars($split); ?></option>
+                                <?php endforeach; ?>
+                            </optgroup>
+                            <?php if (!empty($customPlanNames)): ?>
+                                <optgroup label="Your plans">
+                                    <?php foreach ($customPlanNames as $p): ?>
+                                        <option value="<?php echo htmlspecialchars($p['plan_name']); ?>"><?php echo htmlspecialchars($p['plan_name']); ?></option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                            <?php endif; ?>
+                            <option value="__custom__">Custom split…</option>
+                        </select>
+                        <input type="text" id="plan_name" name="plan_name" class="hidden" placeholder="e.g. Chest + Legs, Shoulders + Back" style="margin-top: 8px;">
+                    </div>
+                    <div class="form-group">
+                        <label>Date</label>
+                        <div class="date-display"><?php echo date('D, M j'); ?></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="duration_minutes">Duration (min)</label>
+                        <input type="number" id="duration_minutes" name="duration_minutes" min="0" placeholder="60">
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <p class="panel-title">Exercises</p>
+                <div id="exerciseList"></div>
+                <button type="button" class="add-row-btn" id="addRowBtn">+ Add exercise</button>
+            </div>
+
+            <div class="save-bar">
+                <a href="dashboard.php"><button type="button" class="btn-ghost">Cancel</button></a>
+                <button type="submit" class="btn-primary" id="saveBtn">Save workout</button>
+            </div>
+        </form>
+    </div>
+
+    <template id="exerciseRowTemplate">
+        <div class="exercise-row">
+            <div class="exercise-row-head">
+                <span>Exercise</span>
+                <button type="button" class="remove-row-btn" onclick="removeRow(this)">×</button>
+            </div>
+            <div class="exercise-fields">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" name="exercise_name[]" placeholder="Incline Bench Press" required>
+                </div>
+                <div class="form-group">
+                    <label>Weight (kg)</label>
+                    <input type="number" name="weight[]" step="0.5" min="0" placeholder="50" required>
+                </div>
+                <div class="form-group">
+                    <label>Reps</label>
+                    <input type="number" name="reps[]" min="1" placeholder="8" required>
+                </div>
+                <div class="form-group">
+                    <label>Sets</label>
+                    <input type="number" name="sets[]" min="1" placeholder="4" required>
+                </div>
+            </div>
+            <div class="exercise-fields-notes">
+                <label>Notes (optional)</label>
+                <input type="text" name="notes[]" placeholder="Felt strong today">
+            </div>
+        </div>
+    </template>
+
+    <script>
+        const planSelect = document.getElementById('plan_select');
+        const planNameInput = document.getElementById('plan_name');
+
+        planSelect.addEventListener('change', function () {
+            if (this.value === '__custom__') {
+                planNameInput.value = '';
+                planNameInput.classList.remove('hidden');
+                planNameInput.required = true;
+                planNameInput.focus();
+            } else {
+                planNameInput.value = this.value;
+                planNameInput.classList.add('hidden');
+                planNameInput.required = false;
+            }
+        });
+
+        const exerciseList = document.getElementById('exerciseList');
+        const template = document.getElementById('exerciseRowTemplate');
+
+        function addRow() {
+            const clone = template.content.cloneNode(true);
+            exerciseList.appendChild(clone);
+            updateRemoveButtons();
+        }
+
+        function removeRow(btn) {
+            const rows = exerciseList.querySelectorAll('.exercise-row');
+            if (rows.length <= 1) return;
+            btn.closest('.exercise-row').remove();
+            updateRemoveButtons();
+        }
+
+        function updateRemoveButtons() {
+            const rows = exerciseList.querySelectorAll('.exercise-row');
+            rows.forEach(row => {
+                row.querySelector('.remove-row-btn').disabled = rows.length <= 1;
+            });
+        }
+
+        document.getElementById('addRowBtn').addEventListener('click', addRow);
+
+        const navbar = document.querySelector('.navbar');
+        let lastScrollY = window.scrollY;
+
+        window.addEventListener('scroll', () => {
+            const currentScrollY = window.scrollY;
+            if (currentScrollY > lastScrollY && currentScrollY > 80) {
+                navbar.classList.add('navbar-hidden');
+            } else if (currentScrollY < lastScrollY) {
+                navbar.classList.remove('navbar-hidden');
+            }
+            lastScrollY = currentScrollY;
+        });
+
+        // Start with one exercise row
+        addRow();
+
+        // Form submit via AJAX
+        const form = document.getElementById('workoutForm');
+        const messageEl = document.getElementById('formMessage');
+        const saveBtn = document.getElementById('saveBtn');
+
+        function showMessage(text, type) {
+            messageEl.textContent = text;
+            messageEl.className = 'message show ' + type;
+        }
+
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving…';
+
+            fetch('api/add-workout.php', {
+                method: 'POST',
+                body: new FormData(form)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage('Workout saved! Redirecting to your dashboard…', 'success');
+                    setTimeout(() => { window.location.href = 'dashboard.php'; }, 1000);
+                } else {
+                    showMessage(data.error || 'Something went wrong. Please try again.', 'error');
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = 'Save workout';
+                }
+            })
+            .catch(() => {
+                showMessage('Could not reach the server. Please try again.', 'error');
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save workout';
+            });
+        });
+    </script>
+</body>
+</html>
