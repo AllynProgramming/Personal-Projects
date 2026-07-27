@@ -1,0 +1,23 @@
+{
+  "name": "Gym Progression Tracker",
+  "short_name": "GymTrack",
+  "description": "Track workouts, progression, and training history",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#05030a",
+  "theme_color": "#7851A9",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
