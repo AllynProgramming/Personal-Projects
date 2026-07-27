@@ -2,11 +2,11 @@
 // includes/db.php
 // Database connection file with security settings
 
-$servername = getenv('DB_HOST') ?: '';
-$username = getenv('DB_USERNAME') ?: '';
-$password = getenv('DB_PASSWORD') ?: '';
-$database = getenv('DB_NAME') ?: '';
-$port = getenv('DB_PORT') ?: ;
+$servername = getenv('DB_HOST') ?: 'sql213.infinityfree.com';
+$username = getenv('DB_USERNAME') ?: 'if0_42502418';
+$password = getenv('DB_PASSWORD') ?: 'zu7c1QR0vxxO';
+$database = getenv('DB_NAME') ?: 'if0_42502418_gym_tracker';
+$port = getenv('DB_PORT') ?: 3306;
 
 // Create connection
 $conn = new mysqli($servername, $username, $password, $database, $port);

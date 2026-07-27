@@ -692,16 +692,6 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         }
 
         @media (max-width: 768px) {
-            .navbar {
-                flex-direction: column;
-                gap: 10px;
-                text-align: center;
-            }
-
-            .navbar-right {
-                justify-content: center;
-            }
-
             .stats-grid {
                 grid-template-columns: 1fr;
             }
@@ -766,8 +756,6 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
         @media (max-width: 480px) {
             .navbar { padding: 14px 18px; }
-            .navbar-right span { display: none; }
-            .navbar-right a { padding: 8px 10px; font-size: 0.88rem; border-radius: 12px; }
 
             .container { padding: 20px 14px 40px; }
 
@@ -850,6 +838,48 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
             .weekly-card-chart {
                 height: 80px;
                 gap: 4px;
+            }
+        }
+
+        /* ---------- Mobile hamburger menu (matches log-workout.php / under-development.php) ---------- */
+        @media (max-width: 860px) {
+            .nav-toggle {
+                display: inline-flex;
+            }
+
+            .navbar-right {
+                display: none;
+                position: absolute;
+                top: calc(100% + 10px);
+                right: 20px;
+                left: 20px;
+                flex-direction: column;
+                align-items: stretch;
+                padding: 14px;
+                background: rgba(5, 5, 15, 0.98);
+                border: 1px solid rgba(151, 109, 222, 0.24);
+                border-radius: 18px;
+                box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24);
+            }
+
+            .navbar-right.is-open {
+                display: flex;
+            }
+
+            .navbar-right span {
+                width: 100%;
+                text-align: center;
+                padding: 8px 0 12px;
+                margin-bottom: 4px;
+                border-bottom: 1px solid rgba(151, 109, 222, 0.18);
+            }
+
+            .navbar-right a {
+                width: 100%;
+                text-align: center;
+                justify-content: center;
+                border-radius: 999px;
+                padding: 12px 16px;
             }
         }
     </style>
@@ -1035,6 +1065,24 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     </div>
 
     <script>
+        // Mobile nav toggle (hamburger / barbell button)
+        const navToggle = document.getElementById('navToggle');
+        const navMenu = document.getElementById('navMenu');
+
+        if (navToggle && navMenu) {
+            navToggle.addEventListener('click', function () {
+                navMenu.classList.toggle('is-open');
+                navToggle.classList.toggle('is-active');
+            });
+
+            document.addEventListener('click', function (event) {
+                if (!navToggle.contains(event.target) && !navMenu.contains(event.target)) {
+                    navMenu.classList.remove('is-open');
+                    navToggle.classList.remove('is-active');
+                }
+            });
+        }
+
         // Sync chart scale and labels scrolling on mobile
         const chartScale = document.querySelector('.welcome-chart .chart-scale');
         const chartLabels = document.querySelector('.welcome-chart .chart-labels');
