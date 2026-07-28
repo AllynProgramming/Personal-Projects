@@ -33,7 +33,7 @@ $stmt = $conn->prepare("
         ws.id,
         ws.session_date,
         wp.plan_name,
-        COUNT(e.id) as exercise_count,
+        COUNT(DISTINCT e.exercise_name) as exercise_count,
         ws.duration_minutes
     FROM workout_sessions ws
     LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id AND wp.user_id = ws.user_id
@@ -54,7 +54,7 @@ $stmt = $conn->prepare("
         ws.id,
         ws.session_date,
         wp.plan_name,
-        COUNT(e.id) as exercise_count,
+        COUNT(DISTINCT e.exercise_name) as exercise_count,
         ws.duration_minutes
     FROM workout_sessions ws
     LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id AND wp.user_id = ws.user_id

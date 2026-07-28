@@ -1,8 +1,6 @@
 <?php
-// api/add-workout.php
-// Saves a workout session. Each exercise now carries its own list of sets
-// (weight + reps + warmup flag can differ set to set), so every set is stored
-// as its own row in `exercises` (sets column is always 1 — one row = one set).
+// api/update-workout.php
+// Update an existing workout session and its associated exercises.
 
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -27,7 +25,19 @@ if (!is_array($input)) {
     exit;
 }
 
+$workoutId = isset($input['workout_id']) ? (int) $input['workout_id'] : 0;
+if ($workoutId <= 0) {
+    echo json_encode(['success' => false, 'error' => 'Invalid workout ID.']);
+    exit;
+}
+
 $userId = getUserId();
+
+if (!verifyOwnership($conn, 'workout_sessions', $workoutId)) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'You do not have permission to edit this workout.']);
+    exit;
+}
 
 $planName = trim($input['plan_name'] ?? '');
 $sessionDate = trim($input['session_date'] ?? '');
@@ -35,7 +45,6 @@ $durationMinutes = trim((string) ($input['duration_minutes'] ?? ''));
 $durationMinutes = ($durationMinutes === '') ? null : (int) $durationMinutes;
 $exercisesInput = is_array($input['exercises'] ?? null) ? $input['exercises'] : [];
 
-// --- Validate the session date ---
 if (empty($sessionDate)) {
     echo json_encode(['success' => false, 'error' => 'Session date is required.']);
     exit;
@@ -47,8 +56,6 @@ if (!$d || $d->format('Y-m-d') !== $sessionDate) {
     exit;
 }
 
-// --- Validate exercises + their sets ---
-// Each exercise needs a name and at least one set with weight + reps.
 $exercises = [];
 foreach ($exercisesInput as $ex) {
     $name = trim($ex['name'] ?? '');
@@ -61,11 +68,11 @@ foreach ($exercisesInput as $ex) {
         $r = $set['reps'] ?? '';
 
         if ($w === '' && $r === '') {
-            continue; // fully empty set row, skip
+            continue;
         }
 
         if ($w === '' || $r === '' || !is_numeric($w) || (float) $w < 0) {
-            echo json_encode(['success' => false, 'error' => "Every set for \"$name\" needs a valid weight and reps."]);
+            echo json_encode(['success' => false, 'error' => "Every set for \"$name\" needs a valid weight and reps."]); 
             exit;
         }
 
@@ -82,7 +89,7 @@ foreach ($exercisesInput as $ex) {
     }
 
     if ($name === '' && empty($sets)) {
-        continue; // fully empty exercise card, skip
+        continue;
     }
 
     if ($name === '') {
@@ -91,7 +98,7 @@ foreach ($exercisesInput as $ex) {
     }
 
     if (empty($sets)) {
-        echo json_encode(['success' => false, 'error' => "Add at least one set for \"$name\", or remove it."]);
+        echo json_encode(['success' => false, 'error' => "Add at least one set for \"$name\", or remove it."]); 
         exit;
     }
 
@@ -103,9 +110,7 @@ if (empty($exercises)) {
     exit;
 }
 
-// --- Resolve (or create) the workout plan ---
 $workoutPlanId = null;
-
 if ($planName !== '') {
     $stmt = $conn->prepare("SELECT id FROM workout_plans WHERE user_id = ? AND plan_name = ? LIMIT 1");
     $stmt->bind_param("is", $userId, $planName);
@@ -126,51 +131,65 @@ if ($planName !== '') {
     }
 }
 
-// --- Insert the workout session ---
-$stmt = $conn->prepare("
-    INSERT INTO workout_sessions (user_id, workout_plan_id, session_date, duration_minutes)
-    VALUES (?, ?, ?, ?)
-");
-$stmt->bind_param("iisi", $userId, $workoutPlanId, $sessionDate, $durationMinutes);
+if ($workoutPlanId === null) {
+    $stmt = $conn->prepare("SELECT id FROM workout_sessions WHERE user_id = ? AND workout_plan_id IS NULL AND session_date = ? AND id != ?");
+    $stmt->bind_param("isi", $userId, $sessionDate, $workoutId);
+} else {
+    $stmt = $conn->prepare("SELECT id FROM workout_sessions WHERE user_id = ? AND workout_plan_id = ? AND session_date = ? AND id != ?");
+    $stmt->bind_param("iisi", $userId, $workoutPlanId, $sessionDate, $workoutId);
+}
+$stmt->execute();
+$result = $stmt->get_result();
+$stmt->close();
 
-if (!$stmt->execute()) {
-    if ($conn->errno === 1062) {
-        echo json_encode([
-            'success' => false,
-            'error' => 'You already logged a workout for this plan on this date. Pick a different date or plan.'
-        ]);
-    } else {
-        echo json_encode(['success' => false, 'error' => 'Could not save the session. Please try again.']);
-    }
-    $stmt->close();
+if ($result->num_rows > 0) {
+    echo json_encode(['success' => false, 'error' => 'A workout for this date and plan already exists.']);
     exit;
 }
 
-$sessionId = $conn->insert_id;
+$conn->begin_transaction();
+
+$stmt = $conn->prepare("UPDATE workout_sessions SET workout_plan_id = ?, session_date = ?, duration_minutes = ? WHERE id = ?");
+$stmt->bind_param("iisi", $workoutPlanId, $sessionDate, $durationMinutes, $workoutId);
+if (!$stmt->execute()) {
+    $conn->rollback();
+    echo json_encode(['success' => false, 'error' => 'Could not update the workout session.']);
+    $stmt->close();
+    exit;
+}
 $stmt->close();
 
-// --- Insert one row per set ---
-$stmt = $conn->prepare("
-    INSERT INTO exercises (session_id, exercise_name, weight, reps, sets, notes, is_warmup)
-    VALUES (?, ?, ?, ?, 1, ?, ?)
-");
+$stmt = $conn->prepare("DELETE FROM exercises WHERE session_id = ?");
+$stmt->bind_param("i", $workoutId);
+$stmt->execute();
+$stmt->close();
+
+$stmt = $conn->prepare(
+    "INSERT INTO exercises (session_id, exercise_name, weight, reps, sets, notes, is_warmup)\n    VALUES (?, ?, ?, ?, 1, ?, ?)"
+);
 
 foreach ($exercises as $ex) {
     foreach ($ex['sets'] as $set) {
         $stmt->bind_param(
             "isdisi",
-            $sessionId,
+            $workoutId,
             $ex['name'],
             $set['weight'],
             $set['reps'],
             $ex['notes'],
             $set['is_warmup']
         );
-        $stmt->execute();
+        if (!$stmt->execute()) {
+            $conn->rollback();
+            echo json_encode(['success' => false, 'error' => 'Could not save exercise sets.']);
+            $stmt->close();
+            exit;
+        }
     }
 }
 $stmt->close();
 
-echo json_encode(['success' => true, 'sessionId' => $sessionId]);
+$conn->commit();
+
+echo json_encode(['success' => true, 'workoutId' => $workoutId]);
 exit;
-?>

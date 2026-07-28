@@ -1,6 +1,7 @@
 <?php
 // api/get-progression.php
 // Returns chart + list data for one exercise, for the logged-in user. Called via fetch() from progression.php.
+// Warmup sets are shown in the entry list (tagged) but excluded from the chart average and personal best.
 
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -21,13 +22,12 @@ if ($exerciseName === '') {
     exit;
 }
 
-// Raw entries — every logged set/row for this exercise, most recent first.
-// Also used to compute personal-best (true max single weight, not an average).
+// Raw entries — every logged set for this exercise, most recent first. Includes warmups (tagged).
 $stmt = $conn->prepare("
-    SELECT ws.session_date AS date, wp.plan_name AS plan_name, e.weight, e.reps, e.sets, e.notes
+    SELECT ws.session_date AS date, wp.plan_name AS plan_name, e.weight, e.reps, e.sets, e.notes, e.is_warmup
     FROM exercises e
     JOIN workout_sessions ws ON e.session_id = ws.id
-    LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id AND wp.user_id = ws.user_id
+    LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id
     WHERE ws.user_id = ? AND e.exercise_name = ?
     ORDER BY ws.session_date DESC, e.id DESC
 ");
@@ -41,13 +41,18 @@ if (empty($entries)) {
     exit;
 }
 
-// Chart data — average weight per session date (matches how the app defines "progression":
-// several sets on the same day are averaged into one point for that day), oldest first.
+foreach ($entries as &$e) {
+    $e['is_warmup'] = (bool) $e['is_warmup'];
+}
+unset($e);
+
+// Chart data — average weight per session date, WORKING SETS ONLY (warmups excluded so a light
+// warmup doesn't drag the day's average down), oldest first.
 $stmt = $conn->prepare("
     SELECT ws.session_date AS date, AVG(e.weight) AS avg_weight
     FROM exercises e
     JOIN workout_sessions ws ON e.session_id = ws.id
-    WHERE ws.user_id = ? AND e.exercise_name = ?
+    WHERE ws.user_id = ? AND e.exercise_name = ? AND e.is_warmup = 0
     GROUP BY ws.session_date
     ORDER BY ws.session_date ASC
 ");
@@ -56,12 +61,46 @@ $stmt->execute();
 $chartRows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
 
-$chart = array_map(function ($row) {
-    return ['date' => $row['date'], 'avg_weight' => round((float) $row['avg_weight'], 1)];
-}, $chartRows);
+$weeks = [];
+$chart = [];
 
-$weights = array_column($entries, 'weight');
-$bestWeight = max($weights);
+foreach ($chartRows as $row) {
+    $date = new DateTime($row['date']);
+    $weekKey = $date->format('o') . '-W' . $date->format('W');
+    $weekStart = (clone $date)->modify('Monday this week');
+    $weekEnd = (clone $weekStart)->modify('Sunday this week');
+    $weekLabel = $weekStart->format('M j') . ' – ' . $weekEnd->format('M j, Y');
+
+    if (!isset($weeks[$weekKey])) {
+        $weeks[$weekKey] = [
+            'weekKey' => $weekKey,
+            'weekLabel' => $weekLabel,
+            'startDate' => $weekStart->format('Y-m-d'),
+            'endDate' => $weekEnd->format('Y-m-d'),
+        ];
+    }
+
+    $chart[] = [
+        'date' => $row['date'],
+        'avg_weight' => round((float) $row['avg_weight'], 1),
+        'weekKey' => $weekKey,
+        'weekLabel' => $weekLabel,
+    ];
+}
+
+usort($weeks, function ($a, $b) {
+    return strcmp($b['startDate'], $a['startDate']);
+});
+
+if (empty($chart)) {
+    echo json_encode(['success' => false, 'error' => 'Only warmup sets logged for this exercise so far — no working-set data yet.']);
+    exit;
+}
+
+// Personal best also excludes warmups
+$workingWeights = array_column(array_filter($entries, fn($e) => !$e['is_warmup']), 'weight');
+$bestWeight = !empty($workingWeights) ? max($workingWeights) : 0;
+
 $firstAvg = $chart[0]['avg_weight'];
 $latestAvg = $chart[count($chart) - 1]['avg_weight'];
 
@@ -75,8 +114,13 @@ echo json_encode([
         'delta' => round($latestAvg - $firstAvg, 1),
         'sessions' => count($chart),
     ],
+    'weeks' => array_values($weeks),
     'chart' => $chart,
-    'entries' => $entries,
+    'entries' => array_map(function ($entry) {
+        $entryDate = new DateTime($entry['date']);
+        $weekKey = $entryDate->format('o') . '-W' . $entryDate->format('W');
+        return array_merge($entry, ['weekKey' => $weekKey]);
+    }, $entries),
 ]);
 exit;
 ?>

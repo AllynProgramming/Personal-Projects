@@ -222,6 +222,27 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
         .entry-row .entry-plan { color: var(--text-muted); font-size: 0.85rem; }
         .entry-row .entry-stats { font-family: inherit; font-weight: 700; color: #d8b8ff; }
         .entry-row .entry-notes { color: var(--text-muted); font-size: 0.85rem; flex-basis: 100%; }
+        .entry-row.is-warmup { border-color: rgba(255, 180, 84, 0.3); background: rgba(255, 180, 84, 0.06); }
+        .warmup-tag {
+            background: rgba(255, 180, 84, 0.16);
+            color: #ffb454;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 9px;
+            border-radius: 999px;
+        }
+        .summary-note { color: var(--text-muted); font-size: 0.85rem; margin: -6px 0 18px; }
+
+        .compare-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .compare-info strong { color: #fff; }
 
         .empty-state {
             background: var(--panel);
@@ -332,6 +353,16 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <div class="exercise-picker">
+                    <label for="primaryWeekSelect">Primary week</label>
+                    <select id="primaryWeekSelect"></select>
+                </div>
+                <div class="exercise-picker">
+                    <label for="compareWeekSelect">Compare week</label>
+                    <select id="compareWeekSelect">
+                        <option value="">None</option>
+                    </select>
+                </div>
             </div>
 
             <div class="summary-grid" id="summaryGrid">
@@ -340,6 +371,7 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
                 <div class="summary-card"><p>Sessions logged</p><h3 id="statSessions">—</h3></div>
                 <div class="summary-card"><p>Change since first</p><h3 id="statDelta">—</h3></div>
             </div>
+            <p class="summary-note">Warmup sets are logged but excluded from these numbers.</p>
 
             <div class="panel">
                 <p class="panel-title">Average weight per session (kg)</p>
@@ -359,30 +391,27 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
         const exerciseSelect = document.getElementById('exerciseSelect');
         let chartInstance = null;
 
+        // ---------- Nav toggle (mobile) — was missing entirely ----------
+        const navToggle = document.getElementById('navToggle');
+        const navMenu = document.getElementById('navMenu');
+
+        if (navToggle && navMenu) {
+            navToggle.addEventListener('click', function () {
+                navMenu.classList.toggle('is-open');
+                navToggle.classList.toggle('is-active');
+            });
+
+            document.addEventListener('click', function (event) {
+                if (!navToggle.contains(event.target) && !navMenu.contains(event.target)) {
+                    navMenu.classList.remove('is-open');
+                    navToggle.classList.remove('is-active');
+                }
+            });
+        }
+
         function fmtDate(iso) {
             const d = new Date(iso + 'T00:00:00');
             return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-        }
-
-        function loadProgression(exerciseName) {
-            document.getElementById('entryList').innerHTML = '<p class="loading-note">Loading…</p>';
-
-            fetch('api/get-progression.php?exercise=' + encodeURIComponent(exerciseName))
-                .then(res => res.json())
-                .then(data => {
-                    if (!data.success) {
-                        document.getElementById('entryList').innerHTML =
-                            '<p class="loading-note">' + (data.error || 'Could not load progression.') + '</p>';
-                        return;
-                    }
-                    renderSummary(data.summary);
-                    renderChart(data.exercise, data.chart);
-                    renderEntries(data.entries);
-                })
-                .catch(() => {
-                    document.getElementById('entryList').innerHTML =
-                        '<p class="loading-note">Could not reach the server.</p>';
-                });
         }
 
         function renderSummary(summary) {
@@ -396,43 +425,133 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
             deltaEl.className = summary.delta > 0 ? 'good' : (summary.delta < 0 ? 'bad' : '');
         }
 
-        function renderChart(exerciseName, chartData) {
-            const labels = chartData.map(row => fmtDate(row.date));
-            const values = chartData.map(row => row.avg_weight);
+        function buildWeekOptions(weeks) {
+            const primary = document.getElementById('primaryWeekSelect');
+            const compare = document.getElementById('compareWeekSelect');
+            primary.innerHTML = '';
+            compare.innerHTML = '<option value="">None</option>';
+
+            weeks.forEach((week, index) => {
+                const option = document.createElement('option');
+                option.value = week.weekKey;
+                option.textContent = week.weekLabel;
+                primary.appendChild(option);
+
+                const compareOption = option.cloneNode(true);
+                compare.appendChild(compareOption);
+            });
+
+            if (weeks.length > 0) {
+                primary.value = weeks[0].weekKey;
+            }
+        }
+
+        function renderChart(exerciseName, allData, primaryWeek, compareWeek) {
+            const primaryData = allData.filter(row => row.weekKey === primaryWeek);
+            const compareData = compareWeek ? allData.filter(row => row.weekKey === compareWeek) : [];
+
+            const labels = [...new Set([].concat(primaryData, compareData).map(row => row.date))]
+                .sort((a,b) => a.localeCompare(b))
+                .map(fmtDate);
+
+            const datasets = [];
+            if (primaryData.length) {
+                datasets.push({
+                    label: exerciseName + ' — ' + primaryWeek,
+                    data: labels.map(label => {
+                        const row = primaryData.find(r => fmtDate(r.date) === label);
+                        return row ? row.avg_weight : null;
+                    }),
+                    borderColor: '#ff4d4f',
+                    backgroundColor: 'rgba(255, 77, 79, 0.12)',
+                    pointBackgroundColor: '#ff4d4f',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    borderWidth: 3,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    tension: 0.35,
+                    fill: false,
+                });
+            }
+            if (compareData.length) {
+                datasets.push({
+                    label: exerciseName + ' — ' + compareWeek,
+                    data: labels.map(label => {
+                        const row = compareData.find(r => fmtDate(r.date) === label);
+                        return row ? row.avg_weight : null;
+                    }),
+                    borderColor: '#4d90ff',
+                    backgroundColor: 'rgba(77, 144, 255, 0.12)',
+                    pointBackgroundColor: '#4d90ff',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    borderWidth: 3,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    tension: 0.35,
+                    borderDash: [8, 4],
+                    fill: false,
+                });
+            }
 
             const ctx = document.getElementById('progressionChart').getContext('2d');
-
             if (chartInstance) chartInstance.destroy();
-
             chartInstance = new Chart(ctx, {
                 type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: exerciseName + ' — avg kg',
-                        data: values,
-                        borderColor: '#a755ff',
-                        backgroundColor: 'rgba(167, 85, 255, 0.15)',
-                        pointBackgroundColor: '#c284ff',
-                        pointBorderColor: '#f6f7ff',
-                        pointRadius: 4,
-                        tension: 0.35,
-                        fill: true,
-                    }]
-                },
+                data: { labels, datasets },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            labels: {
+                                color: '#f6f7ff',
+                                usePointStyle: true,
+                                pointStyle: 'circle',
+                                padding: 16,
+                            }
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: 'rgba(10, 10, 20, 0.96)',
+                            titleColor: '#fff',
+                            bodyColor: '#f3f4f8',
+                            borderColor: 'rgba(255,255,255,0.08)',
+                            borderWidth: 1,
+                        }
+                    },
                     scales: {
                         x: {
-                            ticks: { color: '#adb2d4' },
-                            grid: { color: 'rgba(151, 109, 222, 0.1)' }
+                            grid: {
+                                color: 'rgba(255,255,255,0.08)',
+                                drawBorder: false,
+                            },
+                            ticks: {
+                                color: '#c3c8d9',
+                                font: { size: 12 }
+                            }
                         },
                         y: {
-                            ticks: { color: '#adb2d4' },
-                            grid: { color: 'rgba(151, 109, 222, 0.1)' },
-                            beginAtZero: false
+                            grid: {
+                                color: 'rgba(255,255,255,0.08)',
+                                drawBorder: false,
+                            },
+                            ticks: {
+                                color: '#c3c8d9',
+                                font: { size: 12 },
+                                padding: 10
+                            },
+                            beginAtZero: false,
+                        }
+                    },
+                    interaction: { mode: 'index', intersect: false },
+                    elements: {
+                        line: {
+                            capBezierPoints: true,
+                            borderJoinStyle: 'round'
                         }
                     }
                 }
@@ -442,17 +561,73 @@ $defaultExercise = $exerciseList[0]['exercise_name'] ?? '';
         function renderEntries(entries) {
             const list = document.getElementById('entryList');
             list.innerHTML = entries.map(e => `
-                <div class="entry-row">
+                <div class="entry-row${e.is_warmup ? ' is-warmup' : ''}">
                     <span class="entry-date">${fmtDate(e.date)}</span>
                     <span class="entry-plan">${e.plan_name ? e.plan_name : 'No plan'}</span>
-                    <span class="entry-stats">${e.weight}kg × ${e.reps} × ${e.sets}</span>
+                    ${e.is_warmup ? '<span class="warmup-tag">Warmup</span>' : ''}
+                    <span class="entry-stats">${e.weight}kg × ${e.reps} reps</span>
                     ${e.notes ? `<span class="entry-notes">${e.notes.replace(/</g, '&lt;')}</span>` : ''}
                 </div>
             `).join('');
         }
 
+        function updateWeekSelects(exerciseData) {
+            buildWeekOptions(exerciseData.weeks);
+            document.getElementById('compareWeekSelect').value = '';
+        }
+
+        function loadProgression(exerciseName) {
+            document.getElementById('entryList').innerHTML = '<p class="loading-note">Loading…</p>';
+
+            fetch('api/get-progression.php?exercise=' + encodeURIComponent(exerciseName))
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success) {
+                        document.getElementById('entryList').innerHTML =
+                            '<p class="loading-note">' + (data.error || 'Could not load progression.') + '</p>';
+                        return;
+                    }
+                    updateWeekSelects(data);
+                    renderSummary(data.summary);
+                    const primaryWeek = document.getElementById('primaryWeekSelect').value;
+                    const compareWeek = document.getElementById('compareWeekSelect').value;
+                    renderChart(data.exercise, data.chart, primaryWeek, compareWeek);
+                    renderEntries(data.entries);
+                })
+                .catch(() => {
+                    document.getElementById('entryList').innerHTML =
+                        '<p class="loading-note">Could not reach the server.</p>';
+                });
+        }
+
         exerciseSelect.addEventListener('change', function () {
             loadProgression(this.value);
+        });
+
+        document.getElementById('primaryWeekSelect').addEventListener('change', function () {
+            const exerciseName = exerciseSelect.value;
+            const primaryWeek = this.value;
+            const compareWeek = document.getElementById('compareWeekSelect').value;
+            fetch('api/get-progression.php?exercise=' + encodeURIComponent(exerciseName))
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        renderChart(data.exercise, data.chart, primaryWeek, compareWeek);
+                    }
+                });
+        });
+
+        document.getElementById('compareWeekSelect').addEventListener('change', function () {
+            const exerciseName = exerciseSelect.value;
+            const primaryWeek = document.getElementById('primaryWeekSelect').value;
+            const compareWeek = this.value;
+            fetch('api/get-progression.php?exercise=' + encodeURIComponent(exerciseName))
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        renderChart(data.exercise, data.chart, primaryWeek, compareWeek);
+                    }
+                });
         });
 
         loadProgression(defaultExercise);

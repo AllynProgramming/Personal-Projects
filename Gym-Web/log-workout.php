@@ -1,6 +1,8 @@
 <?php
 // log-workout.php
-// Form to log a new workout session (session details + one or more exercises)
+// Form to log a new workout session. Each exercise gets its own card with as
+// many individual set rows as needed (weight + reps can differ set to set,
+// and a set can be flagged as a warmup).
 
 require_once __DIR__ . '/api/includes/db.php';
 require_once __DIR__ . '/api/includes/auth.php';
@@ -25,8 +27,67 @@ $customPlanNames = array_filter($planNames, function ($p) use ($commonSplits) {
     return !in_array($p['plan_name'], $commonSplits, true);
 });
 
-// Default to today's date, but allow the page to use a user-selected date when present
-$selectedSessionDate = $_GET['session_date'] ?? date('Y-m-d');
+// Default to browser current date on initial load, but preserve an explicit query-date or edit-mode value.
+$selectedSessionDate = $_GET['session_date'] ?? '';
+$hasExplicitSessionDate = isset($_GET['session_date']);
+$editWorkoutId = isset($_GET['workout_id']) ? (int) $_GET['workout_id'] : null;
+$editWorkoutData = null;
+
+if ($editWorkoutId) {
+    $stmt = $conn->prepare(
+        "SELECT ws.session_date, ws.duration_minutes, wp.plan_name
+         FROM workout_sessions ws
+         LEFT JOIN workout_plans wp ON ws.workout_plan_id = wp.id
+         WHERE ws.id = ? AND ws.user_id = ? LIMIT 1"
+    );
+    $stmt->bind_param("ii", $editWorkoutId, $userId);
+    $stmt->execute();
+    $sessionRow = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    if ($sessionRow) {
+        $selectedSessionDate = $sessionRow['session_date'];
+        $editWorkoutData = [
+            'session_date' => $sessionRow['session_date'],
+            'duration_minutes' => $sessionRow['duration_minutes'],
+            'plan_name' => $sessionRow['plan_name'] ?? '',
+            'exercises' => [],
+        ];
+
+        $stmt = $conn->prepare(
+            "SELECT exercise_name, weight, reps, notes, is_warmup
+             FROM exercises
+             WHERE session_id = ?
+             ORDER BY id ASC"
+        );
+        $stmt->bind_param("i", $editWorkoutId);
+        $stmt->execute();
+        $exerciseRows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+
+        $currentKey = null;
+        foreach ($exerciseRows as $row) {
+            $rowKey = $row['exercise_name'] . '|' . $row['notes'];
+            if ($currentKey !== $rowKey) {
+                $editWorkoutData['exercises'][] = [
+                    'name' => $row['exercise_name'],
+                    'notes' => $row['notes'],
+                    'sets' => [],
+                ];
+                $currentKey = $rowKey;
+            }
+
+            $lastIndex = count($editWorkoutData['exercises']) - 1;
+            $editWorkoutData['exercises'][$lastIndex]['sets'][] = [
+                'weight' => $row['weight'],
+                'reps' => $row['reps'],
+                'is_warmup' => (bool) $row['is_warmup'],
+            ];
+        }
+    } else {
+        $editWorkoutId = null;
+    }
+}
 
 // Exercise name suggestions: the user's own history first, topped up with common lifts
 // they haven't logged yet, so the datalist is useful from day one.
@@ -70,6 +131,7 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             --accent: #7851A9;
             --accent-strong: #9b6af0;
             --border: rgba(151, 109, 222, 0.22);
+            --warmup: #ffb454;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -218,36 +280,35 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
         select option { background: #14092b; color: #fff; }
         input[type="date"] { color-scheme: dark; }
 
-        /* ---------- Exercise rows ---------- */
-        #exerciseList { display: grid; gap: 10px; margin-bottom: 14px; }
+        /* ---------- Exercise cards ---------- */
+        #exerciseList { display: grid; gap: 12px; margin-bottom: 14px; }
 
-        .exercise-row {
+        .exercise-card {
             background: var(--panel-2);
             border: 1px solid var(--border);
             border-radius: 16px;
             padding: 16px;
         }
 
-        .exercise-row-head {
+        .exercise-card-head {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
-        .exercise-row-head span {
+        .exercise-card-head span {
             font-size: 0.78rem;
             color: var(--text-muted);
             font-weight: 700;
             letter-spacing: 0.02em;
+            text-transform: uppercase;
         }
 
-        .remove-row-btn {
+        .remove-exercise-btn, .remove-set-btn {
             background: rgba(255, 94, 94, 0.12);
             border: 1px solid rgba(255, 94, 94, 0.28);
             color: #ffb3b3;
-            width: 30px;
-            height: 30px;
             border-radius: 50%;
             font-size: 1rem;
             line-height: 1;
@@ -258,15 +319,81 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             flex-shrink: 0;
         }
 
-        .remove-row-btn:hover { background: rgba(255, 94, 94, 0.22); }
-        .remove-row-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .remove-exercise-btn { width: 30px; height: 30px; }
+        .remove-set-btn { width: 26px; height: 26px; font-size: 0.9rem; }
 
-        .exercise-fields {
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 1fr;
-            gap: 10px;
-            margin-bottom: 10px;
+        .remove-exercise-btn:hover, .remove-set-btn:hover { background: rgba(255, 94, 94, 0.22); }
+        .remove-exercise-btn:disabled, .remove-set-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .exercise-name-field { margin-bottom: 12px; }
+
+        /* Each set: label, weight, reps, warmup toggle, remove — wraps gracefully on narrow screens */
+        .sets-list { display: grid; gap: 8px; margin-bottom: 10px; }
+
+        .set-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 8px 10px;
+            flex-wrap: wrap;
         }
+
+        .set-row.is-warmup { border-color: rgba(255, 180, 84, 0.4); background: rgba(255, 180, 84, 0.07); }
+
+        .set-label {
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            width: 62px;
+            flex-shrink: 0;
+        }
+
+        .set-row.is-warmup .set-label { color: var(--warmup); }
+
+        .set-row input {
+            min-height: 40px;
+            padding: 8px 10px;
+            flex: 1 1 90px;
+        }
+
+        .warmup-toggle {
+            width: 34px;
+            height: 34px;
+            min-height: 0;
+            border-radius: 8px;
+            border: 1px solid rgba(151, 109, 222, 0.3);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            font-weight: 800;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+        }
+
+        .warmup-toggle.active { background: rgba(255, 180, 84, 0.18); border-color: var(--warmup); color: var(--warmup); }
+        .warmup-toggle:hover { border-color: rgba(155, 106, 240, 0.6); }
+
+        .add-set-btn {
+            width: 100%;
+            padding: 10px 0;
+            min-height: 40px;
+            background: rgba(151, 109, 222, 0.1);
+            border: 1px dashed rgba(155, 106, 240, 0.4);
+            color: #d8b8ff;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .add-set-btn:hover { background: rgba(151, 109, 222, 0.18); border-color: rgba(155, 106, 240, 0.7); }
+
+        .exercise-notes-field { margin-top: 12px; }
 
         .add-row-btn {
             width: 100%;
@@ -343,18 +470,13 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
 
             .field-grid { grid-template-columns: 1fr; gap: 12px; align-items: stretch; }
 
-            /* Name gets its own full-width row; weight/reps/sets share a compact triplet below it */
-            .exercise-fields { grid-template-columns: repeat(3, 1fr); gap: 8px; }
-            .exercise-fields .field-name { grid-column: 1 / -1; }
-
             .save-bar { flex-direction: column-reverse; gap: 10px; }
             button.btn-primary, button.btn-ghost { width: 100%; }
         }
 
         @media (max-width: 380px) {
-            .exercise-row { padding: 12px; }
-            .exercise-fields { gap: 6px; }
-            input, select { padding: 11px 12px; }
+            .exercise-card { padding: 12px; }
+            .set-row input { padding: 8px 8px; }
         }
     </style>
 </head>
@@ -379,7 +501,7 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
     <div class="container">
         <div class="page-head">
             <h2>Log a workout</h2>
-            <p>Add today's session — plan, exercises, and the numbers that matter.</p>
+            <p>One card per exercise — add as many sets as you actually did, warmups included.</p>
         </div>
 
         <div class="message" id="formMessage"></div>
@@ -407,6 +529,7 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
                             <option value="__custom__">Custom split…</option>
                         </select>
                         <input type="text" id="plan_name" name="plan_name" class="hidden" placeholder="e.g. Chest + Legs, Shoulders + Back" style="margin-top: 8px;">
+                        <input type="hidden" id="workout_id" value="<?php echo htmlspecialchars($editWorkoutId ?: ''); ?>">
                     </div>
                     <div class="form-group">
                         <label for="session_date">Date</label>
@@ -422,7 +545,7 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             <div class="panel">
                 <p class="panel-title">Exercises</p>
                 <div id="exerciseList"></div>
-                <button type="button" class="add-row-btn" id="addRowBtn">+ Add exercise</button>
+                <button type="button" class="add-row-btn" id="addExerciseBtn">+ Add exercise</button>
             </div>
 
             <div class="save-bar">
@@ -438,34 +561,32 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
         <?php endforeach; ?>
     </datalist>
 
-    <template id="exerciseRowTemplate">
-        <div class="exercise-row">
-            <div class="exercise-row-head">
-                <span class="row-number">#1</span>
-                <button type="button" class="remove-row-btn" aria-label="Remove exercise">×</button>
+    <template id="exerciseCardTemplate">
+        <div class="exercise-card">
+            <div class="exercise-card-head">
+                <span class="exercise-number">Exercise #1</span>
+                <button type="button" class="remove-exercise-btn" aria-label="Remove exercise">×</button>
             </div>
-            <div class="exercise-fields">
-                <div class="form-group field-name">
-                    <label>Name</label>
-                    <input type="text" name="exercise_name[]" list="exerciseNames" placeholder="Incline Bench Press" required>
-                </div>
-                <div class="form-group">
-                    <label>Weight (kg)</label>
-                    <input type="number" name="weight[]" step="0.5" min="0" placeholder="50" required>
-                </div>
-                <div class="form-group">
-                    <label>Reps</label>
-                    <input type="number" name="reps[]" min="1" placeholder="8" required>
-                </div>
-                <div class="form-group">
-                    <label>Sets</label>
-                    <input type="number" name="sets[]" min="1" placeholder="4" required>
-                </div>
+            <div class="form-group exercise-name-field">
+                <label>Exercise name</label>
+                <input type="text" class="ex-name-input" list="exerciseNames" placeholder="Incline Bench Press" required>
             </div>
-            <div class="form-group">
+            <div class="sets-list"></div>
+            <button type="button" class="add-set-btn">+ Add set</button>
+            <div class="form-group exercise-notes-field">
                 <label>Notes (optional)</label>
-                <input type="text" name="notes[]" placeholder="Felt strong today">
+                <input type="text" class="ex-notes-input" placeholder="Felt strong today">
             </div>
+        </div>
+    </template>
+
+    <template id="setRowTemplate">
+        <div class="set-row">
+            <span class="set-label">Set 1</span>
+            <input type="number" class="set-weight-input" step="0.5" min="0" placeholder="Weight (kg)" required>
+            <input type="number" class="set-reps-input" min="1" placeholder="Reps" required>
+            <button type="button" class="warmup-toggle" aria-pressed="false" title="Mark as warmup set">W</button>
+            <button type="button" class="remove-set-btn" aria-label="Remove set">×</button>
         </div>
     </template>
 
@@ -473,6 +594,21 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
         // ---------- Plan dropdown <-> custom plan text field ----------
         const planSelect = document.getElementById('plan_select');
         const planNameInput = document.getElementById('plan_name');
+        const workoutIdInput = document.getElementById('workout_id');
+        const workoutId = <?php echo json_encode($editWorkoutId ?: null); ?> || (workoutIdInput.value ? parseInt(workoutIdInput.value, 10) : null);
+        const editWorkoutData = <?php echo json_encode($editWorkoutData ?: null); ?>;
+        const hasExplicitSessionDate = <?php echo json_encode($hasExplicitSessionDate); ?>;
+
+        function getLocalDateString(date = new Date()) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        if (!editWorkoutData && !hasExplicitSessionDate) {
+            document.getElementById('session_date').value = getLocalDateString();
+        }
 
         planSelect.addEventListener('change', function () {
             if (this.value === '__custom__') {
@@ -487,35 +623,142 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             }
         });
 
-        // ---------- Exercise rows (add/remove via one delegated listener) ----------
-        const exerciseList = document.getElementById('exerciseList');
-        const template = document.getElementById('exerciseRowTemplate');
+        function setPlanSelection(planName) {
+            if (!planName) {
+                planSelect.value = '';
+                planNameInput.value = '';
+                planNameInput.classList.add('hidden');
+                planNameInput.required = false;
+                return;
+            }
 
-        function renumberRows() {
-            const rows = exerciseList.querySelectorAll('.exercise-row');
-            rows.forEach((row, i) => {
-                row.querySelector('.row-number').textContent = '#' + (i + 1);
-                row.querySelector('.remove-row-btn').disabled = rows.length <= 1;
-            });
-        }
-
-        function addRow(focus = false) {
-            const clone = template.content.cloneNode(true);
-            exerciseList.appendChild(clone);
-            renumberRows();
-            if (focus) {
-                exerciseList.querySelector('.exercise-row:last-child input').focus();
+            const optionExists = [...planSelect.options].some(option => option.value === planName);
+            if (optionExists) {
+                planSelect.value = planName;
+                planNameInput.value = planName;
+                planNameInput.classList.add('hidden');
+                planNameInput.required = false;
+            } else {
+                planSelect.value = '__custom__';
+                planNameInput.value = planName;
+                planNameInput.classList.remove('hidden');
+                planNameInput.required = true;
             }
         }
 
+        function populateWorkout(data) {
+            document.getElementById('session_date').value = data.session_date;
+            document.getElementById('duration_minutes').value = data.duration_minutes ?? '';
+            setPlanSelection(data.plan_name ?? '');
+
+            exerciseList.innerHTML = '';
+            data.exercises.forEach(task => {
+                addExerciseCard();
+                const card = exerciseList.querySelector('.exercise-card:last-child');
+                card.querySelector('.ex-name-input').value = task.name;
+                card.querySelector('.ex-notes-input').value = task.notes;
+                const setsList = card.querySelector('.sets-list');
+                setsList.innerHTML = '';
+
+                task.sets.forEach((set, index) => {
+                    const clone = setTemplate.content.cloneNode(true);
+                    setsList.appendChild(clone);
+                    const row = setsList.querySelector('.set-row:last-child');
+                    row.querySelector('.set-weight-input').value = set.weight;
+                    row.querySelector('.set-reps-input').value = set.reps;
+                    if (set.is_warmup) {
+                        row.classList.add('is-warmup');
+                        const warmupToggle = row.querySelector('.warmup-toggle');
+                        warmupToggle.classList.add('active');
+                        warmupToggle.setAttribute('aria-pressed', 'true');
+                    }
+                });
+
+                renumberSets(card);
+            });
+
+            renumberExercises();
+            saveBtn.textContent = 'Update workout';
+        }
+
+        // ---------- Exercise cards + set rows ----------
+        const exerciseList = document.getElementById('exerciseList');
+        const exerciseTemplate = document.getElementById('exerciseCardTemplate');
+        const setTemplate = document.getElementById('setRowTemplate');
+
+        function renumberSets(card) {
+            const rows = card.querySelectorAll('.set-row');
+            let workingCount = 0;
+            rows.forEach(row => {
+                const isWarmup = row.classList.contains('is-warmup');
+                row.querySelector('.set-label').textContent = isWarmup ? 'Warmup' : 'Set ' + (++workingCount);
+                row.querySelector('.remove-set-btn').disabled = rows.length <= 1;
+            });
+        }
+
+        function renumberExercises() {
+            const cards = exerciseList.querySelectorAll('.exercise-card');
+            cards.forEach((card, i) => {
+                card.querySelector('.exercise-number').textContent = 'Exercise #' + (i + 1);
+                card.querySelector('.remove-exercise-btn').disabled = cards.length <= 1;
+            });
+        }
+
+        function addSetRow(card, focus = false) {
+            const clone = setTemplate.content.cloneNode(true);
+            card.querySelector('.sets-list').appendChild(clone);
+            renumberSets(card);
+            if (focus) {
+                card.querySelector('.set-row:last-child input').focus();
+            }
+        }
+
+        function addExerciseCard(focus = false) {
+            const clone = exerciseTemplate.content.cloneNode(true);
+            exerciseList.appendChild(clone);
+            const card = exerciseList.querySelector('.exercise-card:last-child');
+            addSetRow(card);
+            renumberExercises();
+            if (focus) {
+                card.querySelector('.ex-name-input').focus();
+            }
+        }
+
+        // One delegated listener handles every button inside every exercise card,
+        // including ones added later — no per-clone listeners needed.
         exerciseList.addEventListener('click', function (e) {
-            const btn = e.target.closest('.remove-row-btn');
-            if (!btn || btn.disabled) return;
-            btn.closest('.exercise-row').remove();
-            renumberRows();
+            const removeExBtn = e.target.closest('.remove-exercise-btn');
+            if (removeExBtn && !removeExBtn.disabled) {
+                removeExBtn.closest('.exercise-card').remove();
+                renumberExercises();
+                return;
+            }
+
+            const addSetBtn = e.target.closest('.add-set-btn');
+            if (addSetBtn) {
+                addSetRow(addSetBtn.closest('.exercise-card'), true);
+                return;
+            }
+
+            const removeSetBtn = e.target.closest('.remove-set-btn');
+            if (removeSetBtn && !removeSetBtn.disabled) {
+                const card = removeSetBtn.closest('.exercise-card');
+                removeSetBtn.closest('.set-row').remove();
+                renumberSets(card);
+                return;
+            }
+
+            const warmupBtn = e.target.closest('.warmup-toggle');
+            if (warmupBtn) {
+                const row = warmupBtn.closest('.set-row');
+                const isNowWarmup = row.classList.toggle('is-warmup');
+                warmupBtn.classList.toggle('active', isNowWarmup);
+                warmupBtn.setAttribute('aria-pressed', isNowWarmup);
+                renumberSets(warmupBtn.closest('.exercise-card'));
+            }
         });
 
-        document.getElementById('addRowBtn').addEventListener('click', () => addRow(true));
+        document.getElementById('addExerciseBtn').addEventListener('click', () => addExerciseCard(true));
 
         // ---------- Nav toggle (mobile) ----------
         const navToggle = document.getElementById('navToggle');
@@ -549,8 +792,46 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             lastScrollY = currentScrollY;
         });
 
-        // Start with one exercise row
-        addRow();
+        if (editWorkoutData) {
+            populateWorkout(editWorkoutData);
+        } else {
+            // Start with one exercise card (which itself starts with one set row)
+            addExerciseCard();
+        }
+
+        // ---------- Build the payload from the DOM, then submit as JSON ----------
+        function buildPayload() {
+            const exercises = [];
+
+            exerciseList.querySelectorAll('.exercise-card').forEach(card => {
+                const name = card.querySelector('.ex-name-input').value.trim();
+                const notes = card.querySelector('.ex-notes-input').value.trim();
+                const sets = [];
+
+                card.querySelectorAll('.set-row').forEach(row => {
+                    const weight = row.querySelector('.set-weight-input').value;
+                    const reps = row.querySelector('.set-reps-input').value;
+                    if (weight === '' && reps === '') return; // skip a fully empty set row
+
+                    sets.push({
+                        weight: weight,
+                        reps: reps,
+                        is_warmup: row.classList.contains('is-warmup'),
+                    });
+                });
+
+                if (name === '' && sets.length === 0) return; // skip a fully empty exercise card
+                exercises.push({ name, notes, sets });
+            });
+
+            return {
+                workout_id: workoutId,
+                plan_name: planNameInput.value,
+                session_date: document.getElementById('session_date').value,
+                duration_minutes: document.getElementById('duration_minutes').value,
+                exercises,
+            };
+        }
 
         // ---------- Form submit via AJAX — stays on this page after saving ----------
         const form = document.getElementById('workoutForm');
@@ -563,11 +844,11 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
         }
 
         function resetFormForNextEntry() {
-            // Keep plan + date (you're often logging several exercises for the same session),
-            // clear duration and exercises back to a single blank row.
+            // Start fresh after saving, default to today’s date so add flow is always current.
+            document.getElementById('session_date').value = getLocalDateString();
             document.getElementById('duration_minutes').value = '';
             exerciseList.innerHTML = '';
-            addRow();
+            addExerciseCard();
         }
 
         form.addEventListener('submit', function (e) {
@@ -575,15 +856,19 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             saveBtn.disabled = true;
             saveBtn.textContent = 'Saving…';
 
-            fetch('api/add-workout.php', {
+            const endpoint = workoutId ? 'api/update-workout.php' : 'api/add-workout.php';
+            fetch(endpoint, {
                 method: 'POST',
-                body: new FormData(form)
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildPayload())
             })
             .then(res => res.json())
             .then(data => {
                 if (data.success) {
-                    showMessage('Workout saved! <a href="workouts.php">View in My Workouts</a>', 'success');
-                    resetFormForNextEntry();
+                    showMessage((workoutId ? 'Workout updated!' : 'Workout saved!') + ' <a href="workouts.php">View in My Workouts</a>', 'success');
+                    if (!workoutId) {
+                        resetFormForNextEntry();
+                    }
                 } else {
                     showMessage(data.error || 'Something went wrong. Please try again.', 'error');
                 }
@@ -593,7 +878,7 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             })
             .finally(() => {
                 saveBtn.disabled = false;
-                saveBtn.textContent = 'Save workout';
+                saveBtn.textContent = workoutId ? 'Update workout' : 'Save workout';
             });
         });
     </script>

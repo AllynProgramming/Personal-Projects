@@ -34,7 +34,7 @@ if (!empty($workouts)) {
     $types = str_repeat('i', count($sessionIds));
 
     $stmt = $conn->prepare("
-        SELECT session_id, exercise_name, weight, reps, sets, notes
+        SELECT session_id, exercise_name, weight, reps, sets, notes, is_warmup
         FROM exercises
         WHERE session_id IN ($placeholders)
         ORDER BY session_id, id
@@ -51,9 +51,16 @@ if (!empty($workouts)) {
     }
 }
 
-// Page-level summary (sessions / exercises / total volume across everything shown)
+// Helper: how many distinct exercises (not sets) were done in a session
+function distinctExerciseCount($sessionExercises)
+{
+    return count(array_unique(array_column($sessionExercises, 'exercise_name')));
+}
+
+// Page-level summary (sessions / distinct exercises / total sets / total volume across everything shown)
 $totalSessions = count($workouts);
-$totalExercises = array_sum(array_map(fn($w) => count($workoutDetails[$w['id']] ?? []), $workouts));
+$totalExercises = array_sum(array_map(fn($w) => distinctExerciseCount($workoutDetails[$w['id']] ?? []), $workouts));
+$totalSets = array_sum(array_map(fn($w) => count($workoutDetails[$w['id']] ?? []), $workouts));
 $totalVolume = array_sum($workoutVolume);
 
 // Distinct plan names actually in use, for the filter dropdown
@@ -88,24 +95,30 @@ foreach ($workouts as $workout) {
     $workoutsByWeek[$weekKey]['workouts'][] = $workout;
 }
 
-// JSON blob the modal reads from client-side — avoids a second round trip when "View" is clicked
+// JSON blob the modal reads from client-side — avoids a second round trip when "View" is clicked.
+// Sets are grouped by exercise name (each DB row is one set, so several rows can share a name).
 $modalData = [];
 foreach ($workouts as $w) {
+    $exerciseGroups = [];
+    foreach ($workoutDetails[$w['id']] ?? [] as $ex) {
+        $name = $ex['exercise_name'];
+        if (!isset($exerciseGroups[$name])) {
+            $exerciseGroups[$name] = ['name' => $name, 'notes' => $ex['notes'], 'sets' => []];
+        }
+        $exerciseGroups[$name]['sets'][] = [
+            'weight' => $ex['weight'],
+            'reps' => $ex['reps'],
+            'is_warmup' => (bool) $ex['is_warmup'],
+        ];
+    }
+
     $modalData[$w['id']] = [
         'date' => date('l, F j, Y', strtotime($w['session_date'])),
         'plan' => $w['plan_name'] ?: null,
         'duration' => $w['duration_minutes'],
         'mood' => $w['mood'],
         'volume' => round($workoutVolume[$w['id']] ?? 0),
-        'exercises' => array_map(function ($ex) {
-            return [
-                'name' => $ex['exercise_name'],
-                'weight' => $ex['weight'],
-                'reps' => $ex['reps'],
-                'sets' => $ex['sets'],
-                'notes' => $ex['notes'],
-            ];
-        }, $workoutDetails[$w['id']] ?? []),
+        'exercises' => array_values($exerciseGroups),
     ];
 }
 ?>
@@ -228,7 +241,7 @@ foreach ($workouts as $w) {
         /* ---------- Summary strip ---------- */
         .summary-strip {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
             margin-bottom: 18px;
         }
@@ -450,10 +463,22 @@ foreach ($workouts as $w) {
             margin-bottom: 10px;
         }
 
-        .modal-exercise-top { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+        .modal-exercise-top { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
         .modal-exercise-top strong { font-size: 0.95rem; }
-        .modal-exercise-top span { color: #d8b8ff; font-weight: 700; font-size: 0.9rem; white-space: nowrap; }
-        .modal-exercise-notes { color: var(--text-muted); font-size: 0.84rem; }
+        .modal-exercise-notes { color: var(--text-muted); font-size: 0.84rem; margin-top: 6px; }
+
+        .modal-set-line {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            font-size: 0.88rem;
+            border-top: 1px solid rgba(151, 109, 222, 0.1);
+        }
+        .modal-set-line:first-of-type { border-top: none; }
+        .modal-set-label { color: var(--text-muted); }
+        .modal-set-line span:last-child { font-weight: 700; color: #d8b8ff; }
+        .modal-set-line.is-warmup .modal-set-label { color: #ffb454; }
+        .modal-set-line.is-warmup span:last-child { color: #ffb454; }
 
         .modal-actions { margin-top: 18px; display: flex; justify-content: flex-end; }
 
@@ -538,6 +563,7 @@ foreach ($workouts as $w) {
             <div class="summary-strip">
                 <div class="summary-chip"><p>Sessions</p><h4 id="statSessions"><?php echo $totalSessions; ?></h4></div>
                 <div class="summary-chip"><p>Exercises logged</p><h4 id="statExercises"><?php echo $totalExercises; ?></h4></div>
+                <div class="summary-chip"><p>Sets logged</p><h4 id="statSets"><?php echo $totalSets; ?></h4></div>
                 <div class="summary-chip"><p>Total volume</p><h4 id="statVolume"><?php echo number_format($totalVolume); ?> kg</h4></div>
             </div>
 
@@ -577,7 +603,7 @@ foreach ($workouts as $w) {
                                     <div class="workout-date-day"><?php echo date('l, F j', strtotime($workout['session_date'])); ?></div>
                                     <div class="workout-name"><?php echo htmlspecialchars($workout['plan_name'] ?: 'Workout'); ?></div>
                                     <div class="workout-stats">
-                                        <div class="stat"><span class="stat-label">Exercises</span> <span class="stat-value"><?php echo count($workoutDetails[$workout['id']] ?? []); ?></span></div>
+                                        <div class="stat"><span class="stat-label">Exercises</span> <span class="stat-value"><?php echo distinctExerciseCount($workoutDetails[$workout['id']] ?? []); ?></span></div>
                                         <?php if ($workout['duration_minutes']): ?>
                                             <div class="stat"><span class="stat-label">Duration</span> <span class="stat-value"><?php echo $workout['duration_minutes']; ?> min</span></div>
                                         <?php endif; ?>
@@ -588,6 +614,7 @@ foreach ($workouts as $w) {
                                 </div>
                                 <div class="workout-actions">
                                     <button type="button" class="view-btn" data-id="<?php echo $workout['id']; ?>">View</button>
+                                    <button type="button" class="edit-btn" data-id="<?php echo $workout['id']; ?>">Edit</button>
                                     <button type="button" class="delete" data-id="<?php echo $workout['id']; ?>">Delete</button>
                                 </div>
                             </div>
@@ -611,6 +638,7 @@ foreach ($workouts as $w) {
             <div class="modal-facts" id="modalFacts"></div>
             <div id="modalExercises"></div>
             <div class="modal-actions">
+                <button type="button" class="edit-btn" id="modalEditBtn" style="border:1px solid rgba(120,81,169,0.4); background:rgba(120,81,169,0.14); color:#d8b8ff; padding:10px 18px; border-radius:999px; font-weight:700; cursor:pointer;">Edit this workout</button>
                 <button type="button" class="delete" id="modalDeleteBtn" style="border:1px solid rgba(255,94,94,0.3); background:rgba(255,94,94,0.1); color:#ffb3b3; padding:10px 18px; border-radius:999px; font-weight:700; cursor:pointer;">Delete this workout</button>
             </div>
         </div>
@@ -682,15 +710,26 @@ foreach ($workouts as $w) {
             facts.push(`${data.volume.toLocaleString()} kg total volume`);
             document.getElementById('modalFacts').innerHTML = facts.map(f => `<span><strong>${f}</strong></span>`).join('');
 
-            document.getElementById('modalExercises').innerHTML = data.exercises.map(ex => `
-                <div class="modal-exercise">
-                    <div class="modal-exercise-top">
-                        <strong>${escapeHtml(ex.name)}</strong>
-                        <span>${ex.weight}kg × ${ex.reps} × ${ex.sets}</span>
+            document.getElementById('modalExercises').innerHTML = data.exercises.map(ex => {
+                let workingCount = 0;
+                const setLines = ex.sets.map(set => {
+                    const label = set.is_warmup ? 'Warmup' : ('Set ' + (++workingCount));
+                    return `<div class="modal-set-line${set.is_warmup ? ' is-warmup' : ''}">
+                                <span class="modal-set-label">${label}</span>
+                                <span>${set.weight}kg × ${set.reps}</span>
+                            </div>`;
+                }).join('');
+
+                return `
+                    <div class="modal-exercise">
+                        <div class="modal-exercise-top">
+                            <strong>${escapeHtml(ex.name)}</strong>
+                        </div>
+                        ${setLines}
+                        ${ex.notes ? `<div class="modal-exercise-notes">${escapeHtml(ex.notes)}</div>` : ''}
                     </div>
-                    ${ex.notes ? `<div class="modal-exercise-notes">${escapeHtml(ex.notes)}</div>` : ''}
-                </div>
-            `).join('') || '<p style="color:var(--text-muted);">No exercises recorded for this session.</p>';
+                `;
+            }).join('') || '<p style="color:var(--text-muted);">No exercises recorded for this session.</p>';
 
             modalBackdrop.classList.add('is-open');
         }
@@ -757,6 +796,19 @@ foreach ($workouts as $w) {
         document.querySelectorAll('.workout-actions .delete').forEach(btn => {
             btn.addEventListener('click', () => deleteWorkout(btn.dataset.id, btn.closest('.workout-item')));
         });
+
+        document.querySelectorAll('.workout-actions .edit-btn').forEach(btn => {
+            btn.addEventListener('click', () => window.location.href = 'log-workout.php?workout_id=' + encodeURIComponent(btn.dataset.id));
+        });
+
+        const modalEditBtn = document.getElementById('modalEditBtn');
+        if (modalEditBtn) {
+            modalEditBtn.addEventListener('click', () => {
+                if (activeWorkoutId) {
+                    window.location.href = 'log-workout.php?workout_id=' + encodeURIComponent(activeWorkoutId);
+                }
+            });
+        }
 
         document.getElementById('modalDeleteBtn').addEventListener('click', () => {
             if (activeWorkoutId) deleteWorkout(activeWorkoutId, null);
