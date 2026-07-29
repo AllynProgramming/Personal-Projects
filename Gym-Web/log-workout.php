@@ -792,12 +792,12 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
             lastScrollY = currentScrollY;
         });
 
-        if (editWorkoutData) {
-            populateWorkout(editWorkoutData);
-        } else {
-            // Start with one exercise card (which itself starts with one set row)
-            addExerciseCard();
-        }
+        // NOTE: the initial-form-population call (populateWorkout / addExerciseCard) moved to
+        // the very end of this script — see the bottom. It references saveBtn and the submit
+        // handler's setup, which don't exist yet at this point in the file, so calling it here
+        // threw a ReferenceError that silently killed the rest of the script (including the
+        // form's submit listener below), which is why Save fell back to a plain page reload
+        // that saved nothing.
 
         // ---------- Build the payload from the DOM, then submit as JSON ----------
         function buildPayload() {
@@ -881,6 +881,14 @@ sort($exerciseSuggestions, SORT_NATURAL | SORT_FLAG_CASE);
                 saveBtn.textContent = workoutId ? 'Update workout' : 'Save workout';
             });
         });
+
+        // Populate the form now that everything above (saveBtn, the submit handler, etc.) exists.
+        if (editWorkoutData) {
+            populateWorkout(editWorkoutData);
+        } else {
+            // Start with one exercise card (which itself starts with one set row)
+            addExerciseCard();
+        }
     </script>
 </body>
 </html>

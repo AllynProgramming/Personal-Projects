@@ -326,19 +326,21 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         }
 
         .chart-scale {
-            display: grid;
-            grid-template-columns: repeat(7, 1fr);
+            display: flex;
+            align-items: flex-end;
             gap: 8px;
-            align-items: end;
-            min-height: 160px;
+            height: 150px;
+            padding-top: 30px; /* room for the value label above the tallest bar */
         }
 
         .chart-bar {
             position: relative;
-            height: 100%;
+            flex: 1 1 0;
+            min-width: 0;
             background: linear-gradient(180deg, rgba(167, 85, 255, 0.92), rgba(120, 81, 169, 0.95));
             border-radius: 18px 18px 6px 6px;
             box-shadow: inset 0 2px 12px rgba(255,255,255,0.12), 0 0 18px rgba(167, 85, 255, 0.2);
+            transition: height 0.3s ease;
         }
 
         .chart-bar::after {
@@ -725,15 +727,7 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
                 width: 100%;
             }
 
-            .chart-scale,
-            .chart-labels {
-                grid-template-columns: repeat(4, minmax(0, 1fr));
-            }
-
-            .chart-bar {
-                height: auto;
-                min-height: 80px;
-            }
+            .chart-scale { height: 120px; }
 
             .workout-item a {
                 width: 100%;
@@ -777,42 +771,9 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
             .chart-header p { font-size: 0.75rem; }
             .chart-header strong { font-size: 1rem; }
             .chart-header span { font-size: 0.8rem; }
-            .chart-scale { 
-                display: flex;
-                flex-wrap: nowrap;
-                overflow-x: auto;
-                overflow-y: hidden;
-                scroll-snap-type: x proximity;
-                gap: 8px;
-                min-height: 140px;
-                padding-bottom: 8px;
-                -webkit-overflow-scrolling: touch;
-            }
-            .chart-bar { 
-                flex: 0 0 calc(50% - 4px);
-                min-height: 40px; 
-                border-radius: 10px;
-                scroll-snap-align: start;
-            }
-            .chart-bar::after {
-                font-size: 0.75rem;
-                top: -18px;
-            }
-            .chart-labels { 
-                display: flex;
-                flex-wrap: nowrap;
-                overflow-x: auto;
-                overflow-y: hidden;
-                gap: 8px; 
-                font-size: 0.75rem;
-                margin-top: 8px;
-                scroll-snap-type: x proximity;
-                -webkit-overflow-scrolling: touch;
-            }
-            .chart-labels span {
-                flex: 0 0 calc(50% - 4px);
-                scroll-snap-align: start;
-            }
+            .chart-scale { height: 100px; gap: 5px; padding-top: 26px; }
+            .chart-bar::after { font-size: 0.75rem; top: -20px; }
+            .chart-labels { gap: 5px; font-size: 0.7rem; }
 
             .overview-panel { padding: 18px; }
             .overview-actions a { font-size: 0.95rem; padding: 12px; }
@@ -886,7 +847,7 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 </head>
 <body>
     <nav class="navbar">
-        <h1>💪 GymTrack</h1>
+        <h1> GymTrack</h1>
         <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" type="button">
             <span class="barbell-icon" aria-hidden="true">
                 <span class="plate"></span>
@@ -933,15 +894,16 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
                         <?php if ($latestWeekData): ?>
                             <?php
                                 $maxLatestWeekValue = max(array_values($latestWeekData['dayData'])) ?: 1;
+                                $maxBarPx = 120; // matches .chart-scale height minus the label/padding allowance
                                 foreach ($weekDays as $day):
                                     $dayValue = $latestWeekData['dayData'][$day] ?? 0;
-                                    $barHeight = $dayValue > 0 ? max(18, min(100, round(($dayValue / $maxLatestWeekValue) * 100))) : 0;
+                                    $barPx = $dayValue > 0 ? max(14, round(($dayValue / $maxLatestWeekValue) * $maxBarPx)) : 0;
                             ?>
-                                <div class="chart-bar" data-value="<?php echo $dayValue; ?>" style="height: <?php echo $barHeight; ?>%;"></div>
+                                <div class="chart-bar" data-value="<?php echo $dayValue; ?>" style="height: <?php echo $barPx; ?>px;"></div>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <?php for ($i = 0; $i < 7; $i++): ?>
-                                <div class="chart-bar" data-value="0" style="height: 0%;"></div>
+                                <div class="chart-bar" data-value="0" style="height: 0px;"></div>
                             <?php endfor; ?>
                         <?php endif; ?>
                     </div>
@@ -975,9 +937,9 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
                 </div>
 
                 <div class="overview-actions">
-                    <a href="log-workout.php" class="action-button">📝 Log New Workout</a>
-                    <a href="progression.php" class="action-button">📊 View Progression</a>
-                    <a href="workouts.php" class="action-button">🏋️ My Workouts</a>
+                    <a href="log-workout.php" class="action-button"> Log New Workout</a>
+                    <a href="progression.php" class="action-button"> View Progression</a>
+                    <a href="workouts.php" class="action-button"> My Workouts</a>
                 </div>
             </aside>
         </div>
@@ -1080,20 +1042,6 @@ $weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
                     navMenu.classList.remove('is-open');
                     navToggle.classList.remove('is-active');
                 }
-            });
-        }
-
-        // Sync chart scale and labels scrolling on mobile
-        const chartScale = document.querySelector('.welcome-chart .chart-scale');
-        const chartLabels = document.querySelector('.welcome-chart .chart-labels');
-
-        if (chartScale && chartLabels) {
-            chartScale.addEventListener('scroll', () => {
-                chartLabels.scrollLeft = chartScale.scrollLeft;
-            });
-
-            chartLabels.addEventListener('scroll', () => {
-                chartScale.scrollLeft = chartLabels.scrollLeft;
             });
         }
     </script>

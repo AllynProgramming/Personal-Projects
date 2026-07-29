@@ -414,22 +414,22 @@ if (isset($_GET['error'])) {
 <body>
     <div class="page-shell">
         <section class="hero-panel">
-            <div class="hero-badge">💪 GymTrack • Premium fitness tracking</div>
+            <div class="hero-badge"> GymTrack • Personal fitness tracking</div>
             <h1>Train smarter. Track every milestone.</h1>
             <p>Elevate your routine with a clean, motivating workspace built for progress, consistency, and confidence.</p>
 
             <div class="hero-stats">
                 <div class="hero-stat">
-                    <strong>+40%</strong>
-                    <span>strength growth</span>
+                    <strong>Set-by-set</strong>
+                    <span>every rep logged</span>
                 </div>
                 <div class="hero-stat">
-                    <strong>24/7</strong>
-                    <span>progress insight</span>
+                    <strong>Warmup-aware</strong>
+                    <span>PRs skip warmups</span>
                 </div>
                 <div class="hero-stat">
-                    <strong>1 click</strong>
-                    <span>workout logging</span>
+                    <strong>No reloads</strong>
+                    <span>log in place</span>
                 </div>
             </div>
 

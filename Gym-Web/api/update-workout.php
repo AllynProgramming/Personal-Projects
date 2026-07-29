@@ -150,7 +150,7 @@ if ($result->num_rows > 0) {
 $conn->begin_transaction();
 
 $stmt = $conn->prepare("UPDATE workout_sessions SET workout_plan_id = ?, session_date = ?, duration_minutes = ? WHERE id = ?");
-$stmt->bind_param("iisi", $workoutPlanId, $sessionDate, $durationMinutes, $workoutId);
+$stmt->bind_param("isii", $workoutPlanId, $sessionDate, $durationMinutes, $workoutId);
 if (!$stmt->execute()) {
     $conn->rollback();
     echo json_encode(['success' => false, 'error' => 'Could not update the workout session.']);

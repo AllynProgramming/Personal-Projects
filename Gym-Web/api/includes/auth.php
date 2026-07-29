@@ -120,6 +120,27 @@ function getUserInfo($conn, $userId) {
 }
 
 /**
+ * Check if the given user is an admin — identified by an @admin.com email address.
+ */
+function isAdminUser($conn, $userId) {
+    $user = getUserInfo($conn, $userId);
+    if (!$user || empty($user['email'])) {
+        return false;
+    }
+    return str_ends_with(strtolower($user['email']), '@admin.com');
+}
+
+/**
+ * Redirect non-admins away from admin-only pages. Call after requireLogin().
+ */
+function requireAdmin($conn, $userId) {
+    if (!isAdminUser($conn, $userId)) {
+        header('Location: dashboard.php');
+        exit;
+    }
+}
+
+/**
  * Check if one user can view another user's profile
  */
 function canViewProfile($conn, $viewingUserId, $profileUserId) {
